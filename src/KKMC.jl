@@ -3,9 +3,12 @@ module KKMC
 
 include("KKMCEX.jl")
 include("KernelMF.jl")
-
+include("leverage_scores.jl")
 using .KKMCEX
 using .KernelMF
+using .LeverageScores
+
+include("mlj_interface.jl")
 
 function MatrixToVectorData(data::MatrixData)
     return VectorData(data.N,data.L,vec(data.F),data.Kw,data.Kh)
@@ -19,6 +22,8 @@ predict!(model::KRR,data::VectorData) = KKMCEX.predict!(model::KRR,data)
 export KRR, VectorData, fit!, predict!, SamplingMatrix, VectorSampler, KronVectorSampler, sampler, KernelRegressor, TSKRR, RTSKRR, build_kron_matrix
 
 export MF, KMF, RGKMF, fit!, predict!, MatrixData
+
+export get_lscores, Leverage, train_test_pairs
 
 export MatrixToVectorData
 end # module
