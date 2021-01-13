@@ -11,28 +11,30 @@ MMI.@mlj_model mutable struct KRRModel <: MLJModelInterface.Deterministic
 end
 
 function MMI.fit(m::KRRModel,verbosity::Int,x,y,w=1)
-    w = 1 ./ sqrt.(w*length(y))
-    x = x[:]
+    # w = 1 ./ sqrt.(w*length(y))
+    x = x[1]
     K = m.kernel_matrix[x,x]
-    W = diagm(w)
-    K = W*K*W
-    y = W*y
-    fitresult = (x,W*inv(K+m.mu*I)*y)
+    K = reshape(K,(length(x),length(x)))
+    # W = diagm(w)
+    # K = W*K*W
+    # y = W*y
+    # fitresult = (x,W*inv(K+m.mu*I)*y)
+    fitresult = (x,inv(K+m.mu*I)*y)
     cache = nothing
     report = nothing
     return (fitresult,cache,report)
 end
 
 function MMI.predict(m::KRRModel, fitresult, xnew) 
-    x = xnew[:]
+    x = xnew[1]
     samples, coef = fitresult
     K = m.kernel_matrix[x,samples]
     return K*coef
 end
 
-function MMI.clean!(m::KRRModel)
-    return 1
-end
+# function MMI.clean!(m::KRRModel) 
+    # return 1
+# end
 
 struct Leverage <: MLJ.ResamplingStrategy
     s::Int64
@@ -55,8 +57,34 @@ function MLJBase.train_test_pairs(LS::Leverage, rows)
         push!(setlist, (train,test))
     end
     return setlist 
-    # @show [(train, test),]
-    # return [(train, test),]
+end
+
+mutable struct LeverageReweight <: MMI.Unsupervised
+    type::String
+    alpha::Float64
+    s::Int32
+    K::Array{Float64,2}
+end
+
+function MMI.fit(LR::LeverageReweight,verbosity::Int,K)
+    lscores = get_lscores(LR.type,LR.K,1,LR.alpha)
+    probs = lscores ./ sum(lscores) 
+    fitresult = 1/ sqrt.(probs*LR.s)
+    cache = nothing
+    report = nothing
+    return fitresult, cache, report
+end
+
+function MLJ.transform(LR::LeverageReweight, fitresult, x::NamedTuple)
+    idx = x[1]
+    y = x[2]
+    W = diagm(fitresult[idx])
+    return W*y
+end
+
+function MLJ.transform(LR::LeverageReweight, fitresult, K::Array{Float64,2})
+    W = diagm(fitresult[:])
+    return W*K*W
 end
 
 MMI.metadata_pkg.(
