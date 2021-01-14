@@ -4,7 +4,7 @@ import MLJBase
 
 const MMI = MLJModelInterface
 
-@mlj_model mutable struct KRRModel <: MLJModelInterface.Deterministic
+@mlj_model mutable struct KRRModel <: MMI.Deterministic
     mu::Float64 = 1.0
     kernel::String = "linear"
     # kernel_matrix::Array{Float64,2} = zeros(2,2)
@@ -16,9 +16,38 @@ mutable struct Leverage <: MLJ.ResamplingStrategy
     probs::Array{Float64}
     folds::Int32
 end
-
 # Keyword Constructor
 Leverage(; s=1, alpha=1.0, probs=[1.0], folds=1) = Leverage(s,alpha,probs,folds)
+
+@with_kw mutable struct LeverageReweight <: MMI.Unsupervised
+    type::String = ""
+    alpha::Float64 = 1.0
+    s::Int64 = 1
+    K = 2
+end
+# Keyword Constructor
+LeverageReweight(; type="", alpha=2.0, s=1, K=ones(2,2)) = LeverageReweight(type,alpha,s,K)
+
+@with_kw mutable struct LKRRModel <: DeterministicComposite
+    KRR::KRRModel = KRRModel()
+    LR::LeverageReweight = LeverageReweight()
+end
+# keyword constructor
+LKRRModel(; KRR=KRRModel(), LR=LeverageReweight()) = LKRRModel(KRR,LR)
+
+function MMI.fit(model::LKRRModel, verbosity, X, y)
+    ys = source(y)
+    Xs = source(X)
+    lr = machine(model.LR,X)
+    MLJ.fit!(lr)
+    yt = transform(lr,ys)
+    Kt = transform(lr,Xs)
+    krr = machine(model.KRR, Kt, yt)
+    yhat = MMI.predict(krr,Kt)
+    # MLJ.fit!(yhat)
+    mach = machine(Deterministic(), Xs, ys; predict=yhat)
+    return!(mach, model, verbosity)
+end
 
 function MMI.fit(m::KRRModel,verbosity::Int,X,y,w=1)
     idx = y[1]
@@ -40,7 +69,9 @@ end
 # function MMI.clean!(m::KRRModel) 
     # return 1
 # end
-
+function MMI.clean!(m::LeverageReweight) 
+    return 1
+end
 
 
 function MLJBase.train_test_pairs(LS::Leverage, rows)
@@ -54,12 +85,6 @@ function MLJBase.train_test_pairs(LS::Leverage, rows)
     return setlist 
 end
 
-mutable struct LeverageReweight <: MMI.Unsupervised
-    type::String
-    alpha::Float64
-    s::Int32
-    K::Array{Float64,2}
-end
 
 function MMI.fit(LR::LeverageReweight,verbosity::Int,K)
     lscores = get_lscores(LR.type,LR.K,1,LR.alpha)
