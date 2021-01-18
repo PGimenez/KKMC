@@ -23,7 +23,7 @@ export KRR, VectorData, fit!, predict!, SamplingMatrix, VectorSampler, KronVecto
 
 export MF, KMF, RGKMF, fit!, predict!, MatrixData
 
-export get_lscores, Leverage, train_test_pairs, LeverageReweight, transform, LKRRModel
+export get_lscores, Leverage, train_test_pairs, LeverageReweight, transform, LKRRModel, tuple_rms
 
 export MatrixToVectorData
 end # module
