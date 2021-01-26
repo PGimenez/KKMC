@@ -17,10 +17,15 @@ mutable struct Leverage <: MLJ.ResamplingStrategy
     folds::Int32
 end
 
+mutable struct AllData <: MLJ.ResamplingStrategy 
+    N::Int
+end
+
 @with_kw mutable struct LeverageSampler <: MMI.Deterministic
     type::String
     alpha::Float64
     s::Int
+    rng
 end
 LeverageSampler(; type="Leverage", alpha=1.0) = LeverageSampler(type,alpha)
 
@@ -34,7 +39,7 @@ end
 function Leverage(type,alpha,s,K,folds)
     lscores = get_lscores(type,K,1,alpha)
     probs = lscores ./ sum(lscores) 
-    fitresult = 1/ sqrt.(probs*s)
+    fitresult = 1 ./ sqrt.(probs*s)
     return Leverage(s,alpha,probs,folds)
 end
 
@@ -46,8 +51,11 @@ LKRRModel(; KRR=KRRModel(), LS=LeverageSampler()) = LKRRModel(KRR,LS)
 
 
 function MMI.fit(model::LKRRModel, verbosity, X, y)
+    model.LS.rng = model.LS.rng + 1
     ys = source(y)
     Xs = source(X)
+    ys = @node sortdata(ys)
+    Xs = @node sortdata(Xs)
     ls = machine(model.LS,Xs,ys)
     MLJ.fit!(ls)
     lw_model = LeverageWeighter(model.LS.type,model.LS.alpha,model.LS.s)
@@ -59,13 +67,28 @@ function MMI.fit(model::LKRRModel, verbosity, X, y)
     krr = machine(model.KRR, Kt, yt)
     zhat = MMI.predict(krr,K_predict)
     yhat = inverse_transform(ls,zhat)
-    MLJ.fit!(yhat)
-    mach = machine(Deterministic(), Xs, ys; predict=yhat)
+    mach = machine(Deterministic(), source(Xs()), source(ys()); predict=yhat)
     return!(mach, model, verbosity)
 end
 
 weighted_kernel(X,W) = hcat(X[:,1],W*X[:,2:end]*W)
 weighted_kernel(X) = X
+
+function selectycols(m,K,y) 
+    return selectrows(K,y[1])
+end
+
+function sortdata(y::NamedTuple)
+    s = sortperm(y[1])
+    return table((idx=y[1][s], val=y[2][s]))
+end
+
+function sortdata(K::Array{Float64,2})
+    s = sortperm(K[:,1])
+    K[:,1] = K[:,1][s]
+    K[:,2:end] = K[:,2:end][s,:]
+    return K
+end
 
 function MMI.fit(m::KRRModel,verbosity::Int,X,y)
     idx = y[1]
@@ -91,15 +114,14 @@ function MMI.fit(LS::LeverageSampler, verbosity::Int, X, y)
     K = X[:,2:end]
     lscores = get_lscores(LS.type,K,1,LS.alpha)
     probs = lscores ./ sum(lscores) 
-    weights = 1/ sqrt.(probs*LS.s)
-    train = StatsBase.sample(y[1], Weights(probs),LS.s, replace=false)
-    return ((weights[:],train),nothing,nothing)
+    return (probs[:],nothing,nothing)
 end
 
 function MMI.fit(LW::LeverageWeighter, verbosity::Int, X, y)
-    LS = LeverageSampler(LW.type,LW.alpha,LW.s)
-    fitresult,cache,report = MMI.fit(LS,verbosity,X,y)
-    return (fitresult[1],cache,report)
+    LS = LeverageSampler(LW.type,LW.alpha,LW.s,1)
+    probs,cache,report = MMI.fit(LS,verbosity,X,y)
+    weights = 1 ./ sqrt.(probs*LS.s)
+    return (weights[:],cache,report)
 end
 # function MMI.clean!(m::KRRModel) 
     # return 1
@@ -120,32 +142,43 @@ function MLJBase.train_test_pairs(LS::Leverage, rows)
     return setlist 
 end
 
+function MLJBase.train_test_pairs(AD::AllData, rows)
+    return [(shuffle(collect(1:AD.N)),shuffle(collect(1:AD.N)))]
+end
+
 function MLJ.transform(LS::LeverageSampler, fitresult, x::NamedTuple)
-    idx = fitresult[2]
-    w = fitresult[1][idx]
+    rng = MersenneTwister(LS.rng)
+    idxs = StatsBase.sample(rng,x[1], Weights(fitresult),LS.s, replace=false) |> sort
+    w = 1 ./ sqrt.(fitresult[idxs]*LS.s)
     y = x[2]
-    return (idx,w.*y[idx])
+    return table((idx=idxs,val=w[:].*y[idxs]))
 end
 
 function MLJ.inverse_transform(LS::LeverageSampler, fitresult, x::NamedTuple)
     idx = x[1]
     yt = x[2]
-    w = 1 ./ fitresult[1][idx]
+    # w = 1 ./ fitresult[1][idx]
+    w = sqrt.(fitresult[idx]*LS.s)
     return table((idx=idx,val=w.*yt))
 end
 
+
 function MLJ.transform(LS::LeverageSampler, fitresult, K::Array{Float64,2})
-    idx = fitresult[2]
+    # idx = fitresult[2]
+    rng = MersenneTwister(LS.rng)
+    idx = StatsBase.sample(rng,Int.(K[:,1]), Weights(fitresult),LS.s, replace=false) |> sort
     w = fitresult[1]
     K = K[idx,2:end]
+    w = 1 ./ sqrt.(fitresult*LS.s)
     Wl = diagm(w[idx])
-    Wr = diagm(w)
+    Wr = diagm(w[:])
     return hcat(idx,Wl*K*Wr)
 end
 
 function MLJ.transform(LW::LeverageWeighter, fitresult, x::NamedTuple)
     return fitresult .* x[2]
 end
+
 function MLJ.transform(LW::LeverageWeighter, fitresult, K::Array{Float64,2})
     idx = K[:,1]
     K = K[:,2:end]
@@ -153,7 +186,13 @@ function MLJ.transform(LW::LeverageWeighter, fitresult, K::Array{Float64,2})
     return hcat(idx, W*K*W)
 end
 
-tuple_rms(yhat::NamedTuple, ground::NamedTuple) = MLJ.rms(yhat[2],ground[2][yhat[1]])
+function tuple_rms(yhat::NamedTuple, ground::NamedTuple) 
+        # s = sortperm(ground[1])
+        # ground = (ground[1][s],ground[2][s])
+    yhat = sortdata(yhat)
+    ground = sortdata(ground)
+    MLJ.rms(yhat[2],ground[2][yhat[1]])
+end
 
 MMI.metadata_pkg.(
                   (KRRModel),
