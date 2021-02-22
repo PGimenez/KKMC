@@ -1,4 +1,4 @@
-using MLJ,MLJModelInterface
+using MLJ,MLJModelInterface, MLJTuning
 using Random, LinearAlgebra, StatsBase, Parameters
 import MLJBase
 
@@ -49,8 +49,44 @@ end
 end
 LKRRModel(; KRR=KRRModel(), LS=LeverageSampler()) = LKRRModel(KRR,LS)
 
+@with_kw mutable struct TunedLKRRModel <: MMI.Deterministic
+    tuner::MLJTuning.DeterministicTunedModel
+    tuned::Bool
+    tuned_model::LKRRModel
+end
+
+
+function MMI.fit(model::TunedLKRRModel, verbosity, X, y)
+    if model.tuned == false
+        println("fit tuner")
+        mach = machine(model.tuner,X,y)
+        MLJBase.fit!(mach,force=true)
+        model.tuned_model = mach.fitresult.model 
+        lkrr = machine(mach.fitresult.model,X,y)
+        MLJBase.fit!(lkrr)
+        model.tuned = true
+        return (lkrr.fitresult,nothing,nothing)
+    else
+        println("fit LKRR in tuner")
+        lkrr = machine(model.tuned_model,X,y)
+        MLJBase.fit!(lkrr)
+        return (lkrr.fitresult,nothing,nothing)
+    end
+end
+
+function MMI.update(model::TunedLKRRModel, verbosity::Int, old_fitresult, old_cache, X, y)
+    println("update TunedLKRR")
+    model.tuned = false
+    return MMI.fit(model,verbosity,X,y)
+end
+#
+function MMI.predict(model::TunedLKRRModel, fitresult, Xnew)
+    println("predict tuned")
+    return MMI.predict(model.tuned_model,fitresult,Xnew)
+end
 
 function MMI.fit(model::LKRRModel, verbosity, X, y)
+    println("fit composite") 
     model.LS.rng = model.LS.rng + 1
     ys = source(y)
     Xs = source(X)
@@ -61,8 +97,10 @@ function MMI.fit(model::LKRRModel, verbosity, X, y)
     lw_model = LeverageWeighter(model.LS.type,model.LS.alpha,model.LS.s)
     lw = machine(lw_model,Xs,ys)
     MLJ.fit!(lw)
+    # select samples and columns/rows from K and weight them
     yt = transform(ls,ys)
     Kt = transform(ls,Xs)
+    # weight columns/rows of full kernel matrix for prediction
     K_predict = transform(lw,Xs)
     krr = machine(model.KRR, Kt, yt)
     zhat = MMI.predict(krr,K_predict)
@@ -70,6 +108,8 @@ function MMI.fit(model::LKRRModel, verbosity, X, y)
     mach = machine(Deterministic(), source(Xs()), source(ys()); predict=yhat)
     return!(mach, model, verbosity)
 end
+
+
 
 weighted_kernel(X,W) = hcat(X[:,1],W*X[:,2:end]*W)
 weighted_kernel(X) = X
@@ -91,6 +131,7 @@ function sortdata(K::Array{Float64,2})
 end
 
 function MMI.fit(m::KRRModel,verbosity::Int,X,y)
+    println("fit KRR") 
     idx = y[1]
     K = X[:,2:end]
     K = K[:,idx]
@@ -103,6 +144,7 @@ end
 
 
 function MMI.predict(m::KRRModel, fitresult, xnew) 
+    println("predict KRR") 
     samples, coef = fitresult
     idx = setdiff(Int.(xnew[:,1]),samples)
     K = xnew[:,2:end]
