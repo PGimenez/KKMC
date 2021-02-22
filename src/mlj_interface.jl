@@ -21,17 +21,18 @@ mutable struct AllData <: MLJ.ResamplingStrategy
     N::Int
 end
 
-@with_kw mutable struct LeverageSampler <: MMI.Deterministic
-    type::String
+
+@with_kw mutable struct LeverageSampler{T} <: MMI.Deterministic
+    type::T
     alpha::Float64
     s::Int
     rng
 end
-LeverageSampler(; type="Leverage", alpha=1.0) = LeverageSampler(type,alpha)
+LeverageSampler(; type="Leverage", alpha=1.0,s=1,rng=nothing) = LeverageSampler(type,alpha,s,rng)
 
 
-@with_kw mutable struct LeverageWeighter <: MMI.Deterministic
-    type::String
+@with_kw mutable struct LeverageWeighter{T} <: MMI.Deterministic
+    type::T
     alpha::Float64
     s::Int
 end
@@ -217,6 +218,24 @@ function MLJ.transform(LS::LeverageSampler, fitresult, K::Array{Float64,2})
     return hcat(idx,Wl*K*Wr)
 end
 
+function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x::NamedTuple)
+    idxs = sortperm(fitresult)[1:LS.s] |> sort
+    y = x[2]
+    return table((idx=idxs,val=y[idxs]))
+end
+
+function MLJ.inverse_transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x::NamedTuple)
+    idx = x[1]
+    yt = x[2]
+    # w = 1 ./ fitresult[1][idx]
+    return table((idx=idx,val=yt))
+end
+
+function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, K::Array{Float64,2})
+    idx = sortperm(fitresult)[1:LS.s] |> sort
+    return K[idx,:]
+end
+
 function MLJ.transform(LW::LeverageWeighter, fitresult, x::NamedTuple)
     return fitresult .* x[2]
 end
@@ -227,6 +246,9 @@ function MLJ.transform(LW::LeverageWeighter, fitresult, K::Array{Float64,2})
     W = diagm(fitresult)
     return hcat(idx, W*K*W)
 end
+
+MLJ.transform(LW::LeverageWeighter{GreedyLeverageSampling}, fitresult, x::NamedTuple) =  x[2]
+MLJ.transform(LW::LeverageWeighter{GreedyLeverageSampling}, fitresult, K::Array{Float64,2}) = K
 
 function tuple_rms(yhat::NamedTuple, ground::NamedTuple) 
         # s = sortperm(ground[1])

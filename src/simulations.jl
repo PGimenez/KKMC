@@ -1,4 +1,4 @@
-using Parameters
+using Parameters, Plots
 
 @with_kw struct SimConfig
     config_name::String
@@ -20,7 +20,7 @@ abstract type AlgConfig end
 @with_kw mutable struct KRRAlgConfig <: AlgConfig
     name::String
     constructor::Any
-    sampling::String
+    sampling::PassiveSampling
     grid::Bool
     options::Dict = Dict()
     tol::Float64 = 1e-6
@@ -36,63 +36,56 @@ function self_tuning_lkrr(simconf::SimConfig, algconf::KRRAlgConfig)
     AD = AllData(N)
     r_mu = range(lkrr_model, :(KRR.mu), lower=simconf.mu_range[1], upper=simconf.mu_range[2], scale=:log10);
     r_alpha = range(lkrr_model, :(LS.alpha), lower=simconf.alpha_range[1], upper=simconf.alpha_range[2], scale=:log10);
-    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.RandomSearch(), n=simconf.train_rea, resampling=AD, repeats=simconf.train_rea, range=[r_mu, r_alpha], measure=tuple_rms);
+    train_rea = simconf.train_rea
+    if algconf.sampling isa GreedyLeverageSampling; train_rea = 1; end
+    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.RandomSearch(), n=simconf.hyper_points, resampling=AD, repeats=train_rea, range=[r_mu, r_alpha], measure=tuple_rms);
     return self_tuning_regressor
 end
 
-# function run_simulation(config_list, algconf_list)
-    # for config in config_list
-        # for name in config.data_types
-            # for matrix_size in config.sizes
-                # println(matrix_size)
-                # N = convert(Int64,matrix_size[1])
-                # L = convert(Int64,matrix_size[2])
-                # F,Kw,Kh = data_matrices(name,N,L,rank=1)
-                # normF = sum(F.^2)
-                # figpath = "plots/$(config.config_name)/$name/$matrix_size/"
-                # @load "$figpath/ho_results.jld2" opt_param
-                # alg_names = [algconf.name for algconf in algconf_list]
-                # error_methods = Dict(name =>  Dict("mu" => opt_param[name][1], "alpha" => opt_param[name][2], "error" => Matrix, "leverage" => zeros(N*L), "probability" =>zeros(N*L)) for name in alg_names)
-                # error_samples = SharedArray{Float64}(length(config.samples))
-                # for (m,model_conf) in enumerate(algconf_list)
-                    # model = eval(model_conf.constructor)()
-                    # Random.seed!(1920)
-                    # lscores_mat = zeros(length(F),length(config.samples))
-                    # probs_mat = zeros(length(F),length(config.samples))
-                    # for (j,s) in enumerate(config.samples)
-                        # print("$s, ")
-                        # s = convert(Int64,round(s*N*L))
-                        # mu = opt_param[model_conf.name][j,1]
-                        # alpha = opt_param[model_conf.name][j,2]
-                        # lscores = get_lscores(model_conf.sampling,Kw,Kh,alpha)
-                        # probs= get_probs(data,lscores,model_conf.grid)
-                        # lscores_mat[:,j] = lscores
-                        # # probs_mat[:,j] = probs
-                        # model = eval(model_conf.constructor)()
-                        # samples = (model_conf.grid == true) ? [Int(round(sqrt(s))),Int(round(sqrt(s)))] : s
-                        # error_rea = SharedArray{Float64}(config.rea)
-                        # @sync @distributed for r = 1:config.rea
-                            # Random.seed!(convert(Int32,j*r))
-                            # matrix_sampler = get_sampler(model,probs,samples,config.weighted)
-                            # M = sample_matrix(data,matrix_sampler,config.SNR*1.0)
-                            # set_model_params!(mu,M,matrix_sampler,data,model_conf,model)
-                            # fitmodel!(model,data,M)
-                            # error_rea[r] = predict!(model,data)
-                        # end
-                        # error_samples[j] = mean(error_rea)
-                    # end
-                    # error_methods[model_conf.name]["error"] = Array(error_samples/normF)
-                    # error_methods[model_conf.name]["leverage"] = lscores_mat
-                    # # error_methods[model_conf.name]["probability"] = probs_mat
-                # end
-            # Plots.heatmap(data.F)
-            # Plots.savefig("$figpath/Y_$matrix_size.pdf")
-            # samples = config.samples
-            # @save "$figpath/results.jld2" error_methods alg_names algconf_list config samples matrix_size
-            # plot_results("$figpath")
-            # flush(stdout)
-            # end
-        # end
-    # end
-# end
-# export run_simulation
+function run_simulation(config_list, algconf_list)
+    result_curves_conf = Array{Array{NamedTuple}}(undef,length(config_list),length(algconf_list))
+    for (c,cfg) in enumerate(config_list)
+        for (n,name) in enumerate(cfg.data_types)
+            N = convert(Int64,cfg.size[1])
+            # L = convert(Int64,matrix_size[2])
+            F,Kw,Kh = data_matrices(name,N,1,rank=1)
+            K = Kw
+            F = table((idx=collect(1:N),val=F[:]))
+            K = hcat(collect(1:N),K)
+            AD = AllData(N)
+            result_curves = Array{NamedTuple}(undef,length(algconf_list),1)
+            for (m,model_conf) in enumerate(algconf_list)
+                self_tuned_model = self_tuning_lkrr(cfg,model_conf)
+                r_s = range(self_tuned_model, :(model.LS.s), values=cfg.samples);
+                self_tuned_wrapper = TunedLKRRModel(self_tuned_model,false,LKRRModel())
+                strat = [(collect(1:N),collect(1:N)) for i in 1:cfg.rea]
+                r_s = range(self_tuned_wrapper, :(tuner.model.LS.s), values=cfg.samples);
+                tuned_lkrr = machine(self_tuned_wrapper,K,F)
+                rea = cfg.rea
+                if model_conf.sampling isa GreedyLeverageSampling; rea = 1; end
+                result_curves[m] = MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=0)
+            end
+            result_curves_conf[c,n] = result_curves
+        end
+    end
+    return result_curves_conf
+end
+export run_simulation
+
+function plot_curves(config_list,algconf_list,result_curves)
+    for (c,cfg) in enumerate(config_list)
+        plot(0,0,xlabel="s",ylabel="RMS")
+        for (n,name) in enumerate(cfg.data_types)
+            figpath = "plots/$(cfg.config_name)/$name/"
+            mkpath(figpath)
+            mkpath("plots/latest")
+            for (m,model_conf) in enumerate(algconf_list)
+                plot!(result_curves[c,n][m].parameter_values, result_curves[c,n][m].measurements, yscale=:log10, label=model_conf.name)
+            end
+            # title(name)
+            savefig("$figpath/error.pdf")
+            savefig("plots/latest/$(cfg.config_name)-$name-error.pdf")
+        end
+    end
+end
+export plot_curves

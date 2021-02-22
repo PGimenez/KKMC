@@ -4,11 +4,12 @@ module KKMC
 include("KKMCEX.jl")
 include("KernelMF.jl")
 include("leverage_scores.jl")
-include("simulations.jl")
+include("gen_data.jl")
 using .KKMCEX
 using .KernelMF
 using .LeverageScores
 
+include("simulations.jl")
 include("mlj_interface.jl")
 
 function MatrixToVectorData(data::MatrixData)
@@ -24,8 +25,9 @@ export KRR, VectorData, fit!, predict!, SamplingMatrix, VectorSampler, KronVecto
 
 export MF, KMF, RGKMF, fit!, predict!, MatrixData
 
+export PassiveSampling, UniformSampling, LeverageSampling, GreedyLeverageSampling
 export get_lscores, Leverage, AllData, train_test_pairs, LeverageWeighter, LeverageSampler, transform, LKRRModel, tuple_rms
 
-export KRRAlgConfig, SimConfig
-export self_tuning_lkrr
+export KRRAlgConfig, SimConfig, plot_curves
+export TunedLKRRModel, self_tuning_lkrr
 end # module

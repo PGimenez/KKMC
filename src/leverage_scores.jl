@@ -7,8 +7,12 @@ using SharedArrays
 import LinearAlgebra.eigen
 import Base.sortperm
 
-export get_lscores
+export get_lscores, PassiveSampling, UniformSampling, LeverageSampling, GreedyLeverageSampling
 
+abstract type PassiveSampling end
+struct UniformSampling <: PassiveSampling end
+struct LeverageSampling <: PassiveSampling end
+struct GreedyLeverageSampling <: PassiveSampling end
 
 function leverage_scores(K,mu)
     return diag(K*pinv(K+mu*I))
@@ -93,16 +97,16 @@ function leverage_data(Y,alpha)
 end
 
 function get_lscores(method,Kr,Kc,mu)
-    if method == "Uniform"
+    if method isa UniformSampling
         return 0.1*ones(size(Kr,1)*size(Kc,1))
         # elseif  method == "Exact"
         # return leverage(K_kron,mu)
-    elseif  method == "Leverage"
+    elseif  method isa Union{LeverageSampling,GreedyLeverageSampling}
         return leverage_kron(Kr,Kc,mu)
-    elseif  method == "Inverse"
-        return leverage_kron_inv(Kr,Kc,mu)
-    elseif  method == "Sampled"
-        return leverage_kron_samp(Kr,Kc,mu)
+    # elseif  method == "Inverse"
+        # return leverage_kron_inv(Kr,Kc,mu)
+    # elseif  method == "Sampled"
+        # return leverage_kron_samp(Kr,Kc,mu)
     end
 end
 
