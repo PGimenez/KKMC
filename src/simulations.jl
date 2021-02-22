@@ -42,50 +42,55 @@ function self_tuning_lkrr(simconf::SimConfig, algconf::KRRAlgConfig)
     return self_tuning_regressor
 end
 
-function run_simulation(config_list, algconf_list)
-    result_curves_conf = Array{Array{NamedTuple}}(undef,length(config_list),length(algconf_list))
-    for (c,cfg) in enumerate(config_list)
-        for (n,name) in enumerate(cfg.data_types)
-            N = convert(Int64,cfg.size[1])
-            # L = convert(Int64,matrix_size[2])
-            F,Kw,Kh = data_matrices(name,N,1,rank=1)
-            K = Kw
-            F = table((idx=collect(1:N),val=F[:]))
-            K = hcat(collect(1:N),K)
-            AD = AllData(N)
-            result_curves = Array{NamedTuple}(undef,length(algconf_list),1)
-            for (m,model_conf) in enumerate(algconf_list)
-                self_tuned_model = self_tuning_lkrr(cfg,model_conf)
-                r_s = range(self_tuned_model, :(model.LS.s), values=cfg.samples);
-                self_tuned_wrapper = TunedLKRRModel(self_tuned_model,false,LKRRModel())
-                strat = [(collect(1:N),collect(1:N)) for i in 1:cfg.rea]
-                r_s = range(self_tuned_wrapper, :(tuner.model.LS.s), values=cfg.samples);
-                tuned_lkrr = machine(self_tuned_wrapper,K,F)
-                rea = cfg.rea
-                if model_conf.sampling isa GreedyLeverageSampling; rea = 1; end
-                result_curves[m] = MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=0)
-            end
-            result_curves_conf[c,n] = result_curves
+function run_simulation(cfg, algconf_list)
+    result_curves_conf = Array{Array{NamedTuple}}(undef,length(algconf_list))
+    for (n,name) in enumerate(cfg.data_types)
+        N = convert(Int64,cfg.size[1])
+        # L = convert(Int64,matrix_size[2])
+        F,Kw,Kh = data_matrices(name,N,1,rank=1)
+        K = Kw
+        F = table((idx=collect(1:N),val=F[:]))
+        K = hcat(collect(1:N),K)
+        AD = AllData(N)
+        result_curves = Array{NamedTuple}(undef,length(algconf_list),1)
+        for (m,model_conf) in enumerate(algconf_list)
+            self_tuned_model = self_tuning_lkrr(cfg,model_conf)
+            r_s = range(self_tuned_model, :(model.LS.s), values=cfg.samples);
+            self_tuned_wrapper = TunedLKRRModel(self_tuned_model,false,LKRRModel())
+            strat = [(collect(1:N),collect(1:N)) for i in 1:cfg.rea]
+            r_s = range(self_tuned_wrapper, :(tuner.model.LS.s), values=cfg.samples);
+            tuned_lkrr = machine(self_tuned_wrapper,K,F)
+            rea = cfg.rea
+            if model_conf.sampling isa GreedyLeverageSampling; rea = 1; end
+            result_curves[m] = MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=0)
         end
+        result_curves_conf[n] = result_curves
     end
     return result_curves_conf
 end
 export run_simulation
 
-function plot_curves(config_list,algconf_list,result_curves)
-    for (c,cfg) in enumerate(config_list)
-        plot(0,0,xlabel="s",ylabel="RMS")
-        for (n,name) in enumerate(cfg.data_types)
-            figpath = "plots/$(cfg.config_name)/$name/"
-            mkpath(figpath)
-            mkpath("plots/latest")
-            for (m,model_conf) in enumerate(algconf_list)
-                plot!(result_curves[c,n][m].parameter_values, result_curves[c,n][m].measurements, yscale=:log10, label=model_conf.name)
-            end
-            # title(name)
-            savefig("$figpath/error.pdf")
-            savefig("plots/latest/$(cfg.config_name)-$name-error.pdf")
+function plot_curves(cfg,algconf_list,result_curves)
+    plot(0,0,xlabel="s",ylabel="RMS")
+    for (n,name) in enumerate(cfg.data_types)
+        figpath = "plots/$(cfg.config_name)/$name/"
+        mkpath(figpath)
+        mkpath("plots/latest")
+        for (m,model_conf) in enumerate(algconf_list)
+            plot!(result_curves[n][m].parameter_values, result_curves[n][m].measurements, yscale=:log10, label=model_conf.name)
         end
+        # title(name)
+        savefig("$figpath/error.pdf")
+        savefig("plots/latest/$(cfg.config_name)-$name-error.pdf")
+    end
+    closeall()
+end
+
+function  run_simulation_list(cfg_list,alg_list)
+    for cfg in cfg_list
+        result_curves_conf = run_simulation(cfg,alg_list)
+        plot_curves(cfg,alg_list,result_curves_conf)
     end
 end
+
 export plot_curves
