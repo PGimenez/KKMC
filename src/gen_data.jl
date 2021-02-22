@@ -64,6 +64,7 @@ end
 
 function stock_market(N)
     X = MLJBase.@load_smarket
+    # size 1250x7
     X = X[1]
     times = [Dates.value(x)*1.0 for x in X[1]]
     f = X.Today
@@ -75,6 +76,7 @@ end
 
 function labor(N)
     X = RDatasets.dataset("Ecdat","LaborSupply")
+    # size 5320x52
     f = X.LNWG
     X_feat = hcat(X.Disab, X.ID, X.Kids, X.LNHR, X.Year)
     X_feat = X_feat ./ var(X_feat,dims=1)
@@ -86,6 +88,7 @@ end
 
 function housing_matrix(N)
     X = readdlm("data/housing.data")
+    #size 506x14
     F =  Array{Float64,2}(undef,size(X,1),1)
     F[:,:] = X[:,end]
     X = X[1:N,1:end-1]
@@ -206,6 +209,7 @@ end
 function mushroom_matrix(N, L)
     JLD2.@load "data/mushrooms.jld" Pr labels Y
     N_labels = size(Pr,1)
+    #size 5643
     # N_labels = 1000
     # prob = ones(N)*(N_labels/N)
     # rvec = rand(length(prob))

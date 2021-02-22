@@ -1,4 +1,4 @@
-using Parameters, Plots
+using Parameters, Plots, JLD2
 
 @with_kw struct SimConfig
     config_name::String
@@ -84,6 +84,7 @@ function plot_curves(cfg,algconf_list,result_curves)
         savefig("plots/latest/$(cfg.config_name)-$name-error.pdf")
     end
     closeall()
+    @save "$figpath/result_curves-$(cfg.config_name)-$name.jld2" result_curves
 end
 
 function  run_simulation_list(cfg_list,alg_list)
