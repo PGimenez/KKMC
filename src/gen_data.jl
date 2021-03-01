@@ -89,9 +89,14 @@ end
 function housing_matrix(N)
     X = readdlm("data/housing.data")
     #size 506x14
-    F =  Array{Float64,2}(undef,size(X,1),1)
-    F[:,:] = X[:,end]
+    idx = randperm(size(X,1))
+    X = X[idx,:]
+    #data matrix
+    F =  Array{Float64,2}(undef,N,1)
+    F[:,:] = X[1:N,end]
+    #feature matrix
     X = X[1:N,1:end-1]
+    #normalize features
     X = X ./ var(X,dims=1)
     # X = X .- mean(X,dims=1)
     # W = sqrt(pinv(X*X'))

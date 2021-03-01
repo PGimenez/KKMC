@@ -98,10 +98,10 @@ function MMI.fit(model::LKRRModel, verbosity, X, y)
     lw_model = LeverageWeighter(model.LS.type,model.LS.alpha,model.LS.s)
     lw = machine(lw_model,Xs,ys)
     MLJ.fit!(lw)
-    # select samples and columns/rows from K and weight them
+    # select samples and rows from K and weight them
     yt = transform(ls,ys)
     Kt = transform(ls,Xs)
-    # weight columns/rows of full kernel matrix for prediction
+    # weigh columns/rows of full kernel matrix for prediction
     K_predict = transform(lw,Xs)
     krr = machine(model.KRR, Kt, yt)
     zhat = MMI.predict(krr,K_predict)

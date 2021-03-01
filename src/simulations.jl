@@ -1,4 +1,5 @@
 using Parameters, Plots, JLD2
+using KernelFunctions: Kernel
 
 @with_kw struct SimConfig
     config_name::String
@@ -26,6 +27,16 @@ abstract type AlgConfig end
     tol::Float64 = 1e-6
 end
 
+@with_kw mutable struct GPAlgConfig <: AlgConfig
+    name::String
+    constructor::Any
+    sampling::PassiveSampling
+    kernel::Kernel
+    noise::Float64
+    opt_noise::Bool
+    tol::Float64 = 1e-6
+end
+
 function self_tuning_lkrr(simconf::SimConfig, algconf::KRRAlgConfig)
     krr_model = KRRModel(mu=1e-8, kernel="")
     ls_model = LeverageSampler(algconf.sampling,1,1,1)
@@ -49,21 +60,9 @@ function run_simulation(cfg, algconf_list)
         N = convert(Int64,cfg.size[1])
         # L = convert(Int64,matrix_size[2])
         F,Kw,Kh = data_matrices(name,N,1,rank=1)
-        K = Kw
-        F = table((idx=collect(1:N),val=F[:]))
-        K = hcat(collect(1:N),K)
-        AD = AllData(N)
         result_curves = Array{NamedTuple}(undef,length(algconf_list),1)
-        for (m,model_conf) in enumerate(algconf_list)
-            self_tuned_model = self_tuning_lkrr(cfg,model_conf)
-            r_s = range(self_tuned_model, :(model.LS.s), values=cfg.samples);
-            self_tuned_wrapper = TunedLKRRModel(self_tuned_model,false,LKRRModel())
-            strat = [(collect(1:N),collect(1:N)) for i in 1:cfg.rea]
-            r_s = range(self_tuned_wrapper, :(tuner.model.LS.s), values=cfg.samples);
-            tuned_lkrr = machine(self_tuned_wrapper,K,F)
-            rea = cfg.rea
-            if model_conf.sampling isa GreedyLeverageSampling; rea = 1; end
-            result_curves[m] = MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=0)
+        for (m,algconf) in enumerate(algconf_list)
+            result_curves[m] = run_alg(algconf,cfg,F,Kw)
         end
         result_curves_conf[n] = result_curves
     end
@@ -71,21 +70,69 @@ function run_simulation(cfg, algconf_list)
 end
 export run_simulation
 
+
+function run_alg(algconf::KRRAlgConfig,cfg,f,K)
+    N = length(f)
+    F = table((idx=collect(1:N),val=f[:]))
+    K = hcat(collect(1:N),K)
+    AD = AllData(N)
+    self_tuned_model = self_tuning_lkrr(cfg,algconf)
+    r_s = range(self_tuned_model, :(model.LS.s), values=cfg.samples);
+    self_tuned_wrapper = TunedLKRRModel(self_tuned_model,false,LKRRModel())
+    strat = [(collect(1:N),collect(1:N)) for i in 1:cfg.rea]
+    r_s = range(self_tuned_wrapper, :(tuner.model.LS.s), values=cfg.samples);
+    tuned_lkrr = machine(self_tuned_wrapper,K,F)
+    rea = cfg.rea
+    if algconf.sampling isa GreedyLeverageSampling; rea = 1; end
+    return MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=0)
+end
+
+function run_alg(algconf::GPAlgConfig,cfg,f,K)
+    N = length(f)
+    F = f[:]
+    AD = AllData(N)
+    rea = cfg.rea
+    idx_list = [randperm(N)[1:s] for s in cfg.samples]
+    curve = zeros(length(cfg.samples))
+    gp_model = GaussianProcess(algconf.kernel, algconf.noise, algconf.opt_noise)
+    gp = machine(gp_model,K,F)
+    sigma_vec = zeros(cfg.train_rea)
+    train_err = zeros(cfg.train_rea)
+    for (i,idx) in enumerate(idx_list)
+        MLJ.fit!(gp,rows=idx)
+        sigma_vec[i] = gp.fitresult.likelihood.σ²[1]
+        testidx = setdiff(1:N,idx)
+        fhat = MLJ.predict(gp,rows=testidx)
+        train_err[i] = rms(F[testidx],fhat)
+    end
+    min_sigma = sigma_vec[argmin(train_err)]
+    gp_model.noise = min_sigma
+    gp_model.opt_noise = false
+    test_err = zeros(length(cfg.samples))
+    for (i,s) in enumerate(cfg.samples)
+        holdout = Holdout(fraction_train = s/N, shuffle=true)
+        strat = [MLJBase.train_test_pairs(holdout,1:N)[1] for r in 1:cfg.rea]
+        result = evaluate!(gp, resampling=strat, measure=rms, verbosity=1,check_measure=false)
+        test_err[i] = result.measurement[1] 
+    end
+    return (parameter_values = cfg.samples, measurements = test_err)
+end
+
 function plot_curves(cfg,algconf_list,result_curves)
     plot(0,0,xlabel="s",ylabel="RMS")
     for (n,name) in enumerate(cfg.data_types)
         figpath = "plots/$(cfg.config_name)/$name/"
         mkpath(figpath)
         mkpath("plots/latest")
-        for (m,model_conf) in enumerate(algconf_list)
-            plot!(result_curves[n][m].parameter_values, result_curves[n][m].measurements, yscale=:log10, label=model_conf.name)
+        for (m,algconf) in enumerate(algconf_list)
+            plot!(result_curves[n][m].parameter_values, result_curves[n][m].measurements, yscale=:log10, label=algconf.name)
         end
         # title(name)
         savefig("$figpath/error.pdf")
-        savefig("plots/latest/$(cfg.config_name)-$name-error.pdf")
+        savefig("plots/latest/$(cfg.config_name)-$name-$(cfg.size[1])-error.pdf")
+        closeall()
+        @save "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1])-.jld2" result_curves
     end
-    closeall()
-    @save "$figpath/result_curves-$(cfg.config_name)-$name.jld2" result_curves
 end
 
 function  run_simulation_list(cfg_list,alg_list)

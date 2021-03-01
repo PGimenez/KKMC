@@ -11,6 +11,7 @@ using .LeverageScores
 
 include("simulations.jl")
 include("mlj_interface.jl")
+include("gp_interface.jl")
 
 function MatrixToVectorData(data::MatrixData)
     return VectorData(data.N,data.L,vec(data.F),data.Kw,data.Kh)
@@ -28,6 +29,8 @@ export MF, KMF, RGKMF, fit!, predict!, MatrixData
 export PassiveSampling, UniformSampling, LeverageSampling, GreedyLeverageSampling
 export get_lscores, Leverage, AllData, train_test_pairs, LeverageWeighter, LeverageSampler, transform, LKRRModel, tuple_rms
 
-export KRRAlgConfig, SimConfig, plot_curves, run_simulation_list
+export  SimConfig, KRRAlgConfig, GPAlgConfig, plot_curves, run_simulation_list
 export TunedLKRRModel, self_tuning_lkrr
+
+export GaussianProcess
 end # module
