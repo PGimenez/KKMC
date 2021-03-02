@@ -2,10 +2,14 @@ using PyCall
 using LightGraphs
 using StatsBase, Statistics, SparseArrays, LinearAlgebra, JLD2, Random, MLJBase, Dates
 using DelimitedFiles
-import RDatasets
+using KernelFunctions: ExponentialKernel, LinearKernel
+import RDatasets, KernelFunctions
 
-
-
+DataKernels = Dict("housing"   => KernelFunctions.transform(ExponentialKernel(),0.1),
+                   "mushrooms" => LinearKernel(c=1e-8),
+                   "stocks"    => KernelFunctions.transform(ExponentialKernel(),0.1),
+                   "labor"     => KernelFunctions.transform(ExponentialKernel(),0.1),
+                   "wine"      => KernelFunctions.transform(ExponentialKernel(),2))
 
 function make_PSD(K)
     if size(K,1) == 1; return K; end;
@@ -69,9 +73,10 @@ function stock_market(N)
     times = [Dates.value(x)*1.0 for x in X[1]]
     f = X.Today
     X_feat = hcat(times, X.Lag1, X.Lag2, X.Lag3, X.Lag4, X.Lag5, X.Volume)
+    X_feat = X_feat ./ var(X_feat,dims=1)
     idx = randperm(length(f))[1:N]
     K = gaussian_kernel(X_feat[idx,:],10)
-    return f[idx], K, [1]
+    return f[idx], X_feat[idx,:], K, [1]
 end
 
 function labor(N)
@@ -83,7 +88,7 @@ function labor(N)
     idx = randperm(length(f))[1:N]
     K = gaussian_kernel(X_feat[idx,:],10)
     # K = (1/N)*X_feat[idx,:]*X_feat[idx,:]'
-    return f[idx], K, [1]
+    return f[idx],X_feat[idx,:], K, [1]
 end
 
 function housing_matrix(N)
@@ -137,7 +142,7 @@ function wine_data(N)
     Kw = gaussian_kernel(X,1)
     Kh =  Array{Float64,2}(undef,1,1)
     Kh[:] = [1]
-    return F, Kw, Kh
+    return F, X,Kw, Kh
 end
 
 function temp_matrix(N,L)
@@ -225,7 +230,7 @@ function mushroom_matrix(N, L)
     F = Y[idx,idx]
     Kw = cor(Pr,Pr,dims=2)
     # Kw = Pr*Pr'
-    Kw = gaussian_kernel(Pr,10)
+    # Kw = gaussian_kernel(Pr,10)
     if L == 1
         Kh =  Array{Float64,2}(undef,1,1)
         Kh[:] = [1]
@@ -234,7 +239,7 @@ function mushroom_matrix(N, L)
     else
         Kh = Kw
     end
-return F,Kw,Kh
+return F,Pr,Kw,Kh
 end
 
 function data_matrices(name,N,L; rank=1)
@@ -255,15 +260,15 @@ function data_matrices(name,N,L; rank=1)
     elseif (name == "drugs_norm")
         F,Kw,Kh = drug_matrix(N,L,delta=0.5)
     elseif (name == "mushrooms")
-        F,Kw,Kh = mushroom_matrix(N,L)
+        F,X,Kw,Kh = mushroom_matrix(N,L)
     elseif (name == "housing")
         F,X,Kw,Kh = housing_matrix(N)
     elseif (name == "wine")
-        F,Kw,Kh = wine_data(N)
+        F,X,Kw,Kh = wine_data(N)
     elseif (name == "stocks")
-        F,Kw,Kh = stock_market(N)
+        F,X,Kw,Kh = stock_market(N)
     elseif (name == "labor")
-        F,Kw,Kh = labor(N)
+        F,X,Kw,Kh = labor(N)
     else
         error("Wrong data name")
     end

@@ -19,6 +19,7 @@ import KernelFunctions
 end
 
 abstract type AlgConfig end
+
 @with_kw mutable struct KRRAlgConfig <: AlgConfig
     name::String
 end
@@ -63,12 +64,10 @@ end
 function run_simulation(cfg, algconf_list)
     result_curves_conf = Array{Array{NamedTuple}}(undef,length(algconf_list))
     for (n,name) in enumerate(cfg.data_types)
-        N = convert(Int64,cfg.size[1])
         # L = convert(Int64,matrix_size[2])
-        F,X,Kw,Kh = data_matrices(name,N,1,rank=1)
         result_curves = Array{NamedTuple}(undef,length(algconf_list),1)
         for (m,algconf) in enumerate(algconf_list)
-            result_curves[m] = run_alg(algconf,cfg,F,X,Kw)
+            result_curves[m] = run_alg(algconf,cfg,name)
         end
         result_curves_conf[n] = result_curves
     end
@@ -76,11 +75,12 @@ function run_simulation(cfg, algconf_list)
 end
 export run_simulation
 
-function run_alg(algconf::LKRRAlgConfig,cfg,f,X,K)
-    N = length(f)
-    F = table((idx=collect(1:N),val=f[:]))
-    kfunc = KernelFunctions.transform(KernelFunctions.ExponentialKernel(),0.1)
-    K = KernelFunctions.kernelmatrix(kfunc,X,obsdim=1)
+function run_alg(algconf::LKRRAlgConfig,cfg,name)
+    N = convert(Int64,cfg.size[1])
+    F,X,K,Kh = data_matrices(name,N,1,rank=1)
+    N = length(F)
+    F = table((idx=collect(1:N),val=F[:]))
+    K = KernelFunctions.kernelmatrix(DataKernels[name],X,obsdim=1)
     K = hcat(collect(1:N),K)
     AD = AllData(N)
     self_tuned_model = self_tuning_lkrr(cfg,algconf)
@@ -94,10 +94,12 @@ function run_alg(algconf::LKRRAlgConfig,cfg,f,X,K)
     return MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=-1)
 end
 
-function run_alg(algconf::GPAlgConfig,cfg,f,X,K)
+function run_alg(algconf::GPAlgConfig,cfg,name)
+    N = convert(Int64,cfg.size[1])
+    f,X,K,Kh = data_matrices(name,N,1,rank=1)
     N = length(f)
     F = f[:]
-    gp_model = GaussianProcess(algconf.kernel, algconf.noise, algconf.opt_noise)
+    gp_model = GaussianProcess(DataKernels[name], algconf.noise, algconf.opt_noise)
     gp = machine(gp_model,X,F)
     test_err = zeros(length(cfg.samples))
     for (i,s) in enumerate(cfg.samples)
@@ -109,10 +111,12 @@ function run_alg(algconf::GPAlgConfig,cfg,f,X,K)
     return (parameter_values = cfg.samples, measurements = test_err)
 end
 
-function run_alg(algconf::KRRAlgConfig,cfg,f,X,K)
+function run_alg(algconf::KRRAlgConfig,cfg,name)
+    N = convert(Int64,cfg.size[1])
+    f,X,K,Kh = data_matrices(name,N,1,rank=1)
     N = length(f)
-    kfunc = KernelFunctions.transform(KernelFunctions.ExponentialKernel(),0.1)
-    K = KernelFunctions.kernelmatrix(kfunc,X,obsdim=1)
+    # kfunc = KernelFunctions.transform(KernelFunctions.ExponentialKernel(),0.1)
+    K = KernelFunctions.kernelmatrix(DataKernels[name],X,obsdim=1)
     K = hcat(collect(1:N),K)
     F = table((idx=collect(1:N),val=f[:]))
     krr_model = KRRModel()
@@ -135,8 +139,8 @@ function run_alg(algconf::KRRAlgConfig,cfg,f,X,K)
 end
 
 function plot_curves(cfg,algconf_list,result_curves)
-    plot(0,0,xlabel="s",ylabel="RMS")
     for (n,name) in enumerate(cfg.data_types)
+        plot(0,0,xlabel="s",ylabel="RMS")
         figpath = "plots/$(cfg.config_name)/$name/"
         mkpath(figpath)
         mkpath("plots/latest")
@@ -147,8 +151,8 @@ function plot_curves(cfg,algconf_list,result_curves)
         # title(name)
         savefig("$figpath/error.pdf")
         savefig("plots/latest/$(cfg.config_name)-$name-$(cfg.size[1])-error.pdf")
-        closeall()
         @save "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1])-.jld2" result_curves
+        closeall()
     end
 end
 
