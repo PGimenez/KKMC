@@ -97,8 +97,10 @@ function leverage_data(Y,alpha)
 end
 
 function get_lscores(method,Kr,Kc,mu)
+    # @show method isa UniformSampling, typeof(method)
+
     if method isa UniformSampling
-        return 0.1*ones(size(Kr,1)*size(Kc,1))
+        return ones(size(Kr,1)*size(Kc,1))
         # elseif  method == "Exact"
         # return leverage(K_kron,mu)
     elseif  method isa Union{LeverageSampling,GreedyLeverageSampling}

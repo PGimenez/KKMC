@@ -29,7 +29,7 @@ export MF, KMF, RGKMF, fit!, predict!, MatrixData
 export PassiveSampling, UniformSampling, LeverageSampling, GreedyLeverageSampling
 export get_lscores, Leverage, AllData, train_test_pairs, LeverageWeighter, LeverageSampler, transform, LKRRModel, tuple_rms
 
-export  SimConfig, KRRAlgConfig, GPAlgConfig, plot_curves, run_simulation_list
+export  SimConfig, LKRRAllgConfig, GPAlgConfig, plot_curves, run_simulation_list
 export TunedLKRRModel, self_tuning_lkrr
 
 export GaussianProcess

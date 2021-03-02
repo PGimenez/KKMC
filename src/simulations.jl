@@ -18,7 +18,7 @@ using KernelFunctions: Kernel
 end
 
 abstract type AlgConfig end
-@with_kw mutable struct KRRAlgConfig <: AlgConfig
+@with_kw mutable struct LKRRAllgConfig <: AlgConfig
     name::String
     constructor::Any
     sampling::PassiveSampling
@@ -37,7 +37,7 @@ end
     tol::Float64 = 1e-6
 end
 
-function self_tuning_lkrr(simconf::SimConfig, algconf::KRRAlgConfig)
+function self_tuning_lkrr(simconf::SimConfig, algconf::LKRRAllgConfig)
     krr_model = KRRModel(mu=1e-8, kernel="")
     ls_model = LeverageSampler(algconf.sampling,1,1,1)
     lkrr_model = LKRRModel(krr_model,ls_model)
@@ -50,7 +50,9 @@ function self_tuning_lkrr(simconf::SimConfig, algconf::KRRAlgConfig)
     train_rea = simconf.train_rea
     if algconf.sampling isa GreedyLeverageSampling; train_rea = 1; end
     # self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.RandomSearch(), n=simconf.hyper_points, resampling=AD, repeats=train_rea, range=[r_mu, r_alpha], measure=tuple_rms);
-    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=simconf.hyper_points, resampling=AD, repeats=train_rea, range=[r_mu, r_alpha], measure=tuple_rms);
+    param_ranges = [r_mu, r_alpha]
+    if algconf.sampling isa UniformSampling; param_ranges = r_mu; end
+    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=simconf.hyper_points, resampling=AD, repeats=train_rea, range=param_ranges, measure=tuple_rms);
     return self_tuning_regressor
 end
 
@@ -59,10 +61,10 @@ function run_simulation(cfg, algconf_list)
     for (n,name) in enumerate(cfg.data_types)
         N = convert(Int64,cfg.size[1])
         # L = convert(Int64,matrix_size[2])
-        F,Kw,Kh = data_matrices(name,N,1,rank=1)
+        F,X,Kw,Kh = data_matrices(name,N,1,rank=1)
         result_curves = Array{NamedTuple}(undef,length(algconf_list),1)
         for (m,algconf) in enumerate(algconf_list)
-            result_curves[m] = run_alg(algconf,cfg,F,Kw)
+            result_curves[m] = run_alg(algconf,cfg,F,X,Kw)
         end
         result_curves_conf[n] = result_curves
     end
@@ -70,8 +72,7 @@ function run_simulation(cfg, algconf_list)
 end
 export run_simulation
 
-
-function run_alg(algconf::KRRAlgConfig,cfg,f,K)
+function run_alg(algconf::LKRRAllgConfig,cfg,f,X,K)
     N = length(f)
     F = table((idx=collect(1:N),val=f[:]))
     K = hcat(collect(1:N),K)
@@ -84,35 +85,19 @@ function run_alg(algconf::KRRAlgConfig,cfg,f,K)
     tuned_lkrr = machine(self_tuned_wrapper,K,F)
     rea = cfg.rea
     if algconf.sampling isa GreedyLeverageSampling; rea = 1; end
-    return MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=0)
+    return MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=-1)
 end
 
-function run_alg(algconf::GPAlgConfig,cfg,f,K)
+function run_alg(algconf::GPAlgConfig,cfg,f,X,K)
     N = length(f)
     F = f[:]
-    AD = AllData(N)
-    rea = cfg.rea
-    idx_list = [randperm(N)[1:s] for s in cfg.samples]
-    curve = zeros(length(cfg.samples))
     gp_model = GaussianProcess(algconf.kernel, algconf.noise, algconf.opt_noise)
-    gp = machine(gp_model,K,F)
-    sigma_vec = zeros(cfg.train_rea)
-    train_err = zeros(cfg.train_rea)
-    for (i,idx) in enumerate(idx_list)
-        MLJ.fit!(gp,rows=idx)
-        sigma_vec[i] = gp.fitresult.likelihood.σ²[1]
-        testidx = setdiff(1:N,idx)
-        fhat = MLJ.predict(gp,rows=testidx)
-        train_err[i] = rms(F[testidx],fhat)
-    end
-    min_sigma = sigma_vec[argmin(train_err)]
-    gp_model.noise = min_sigma
-    gp_model.opt_noise = false
+    gp = machine(gp_model,X,F)
     test_err = zeros(length(cfg.samples))
     for (i,s) in enumerate(cfg.samples)
         holdout = Holdout(fraction_train = s/N, shuffle=true)
         strat = [MLJBase.train_test_pairs(holdout,1:N)[1] for r in 1:cfg.rea]
-        result = evaluate!(gp, resampling=strat, measure=rms, verbosity=1,check_measure=false)
+        result = evaluate!(gp, resampling=strat, measure=rms, verbosity=-1,check_measure=false)
         test_err[i] = result.measurement[1] 
     end
     return (parameter_values = cfg.samples, measurements = test_err)

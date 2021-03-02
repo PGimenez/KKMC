@@ -89,11 +89,11 @@ end
 function housing_matrix(N)
     X = readdlm("data/housing.data")
     #size 506x14
-    idx = randperm(size(X,1))
+    idx = randperm(size(X,1))[1:N]
     X = X[idx,:]
     #data matrix
     F =  Array{Float64,2}(undef,N,1)
-    F[:,:] = X[1:N,end]
+    F[:,:] = X[:,end]
     #feature matrix
     X = X[1:N,1:end-1]
     #normalize features
@@ -101,10 +101,10 @@ function housing_matrix(N)
     # X = X .- mean(X,dims=1)
     # W = sqrt(pinv(X*X'))
     # X = W*X
-    Kw = gaussian_kernel(X,10)
-    Kh =  Array{Float64,2}(undef,1,1)
+    Kw = gaussian_kernel(X,1)
+    Kh =  Array{Float64,2}(undef,1,10)
     Kh[1,1] = 1
-    return F, Kw, Kh
+    return F, X, Kw, Kh
 end
 
 function drug_matrix(N,L; delta = 0)
@@ -225,7 +225,7 @@ function mushroom_matrix(N, L)
     F = Y[idx,idx]
     Kw = cor(Pr,Pr,dims=2)
     # Kw = Pr*Pr'
-    # Kw = gaussian_kernel(Pr,10)
+    Kw = gaussian_kernel(Pr,10)
     if L == 1
         Kh =  Array{Float64,2}(undef,1,1)
         Kh[:] = [1]
@@ -257,7 +257,7 @@ function data_matrices(name,N,L; rank=1)
     elseif (name == "mushrooms")
         F,Kw,Kh = mushroom_matrix(N,L)
     elseif (name == "housing")
-        F,Kw,Kh = housing_matrix(N)
+        F,X,Kw,Kh = housing_matrix(N)
     elseif (name == "wine")
         F,Kw,Kh = wine_data(N)
     elseif (name == "stocks")
@@ -267,7 +267,7 @@ function data_matrices(name,N,L; rank=1)
     else
         error("Wrong data name")
     end
-    return F,make_PSD(Kw),make_PSD(Kh)
+    return F,X,make_PSD(Kw),make_PSD(Kh)
 end
 
 function temp_covkernel(name,N,L)

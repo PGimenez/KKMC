@@ -154,9 +154,11 @@ function MMI.predict(m::KRRModel, fitresult, xnew)
 end
 
 function MMI.fit(LS::LeverageSampler, verbosity::Int, X, y)
+    @show LS.type isa UniformSampling, typeof(LS.type)
     K = X[:,2:end]
     lscores = get_lscores(LS.type,K,1,LS.alpha)
     probs = lscores ./ sum(lscores) 
+    # probs = ones(length(probs))
     return (probs[:],nothing,nothing)
 end
 
@@ -164,6 +166,7 @@ function MMI.fit(LW::LeverageWeighter, verbosity::Int, X, y)
     LS = LeverageSampler(LW.type,LW.alpha,LW.s,1)
     probs,cache,report = MMI.fit(LS,verbosity,X,y)
     weights = 1 ./ sqrt.(probs*LS.s)
+    # weights = ones(length(weights))
     return (weights[:],cache,report)
 end
 # function MMI.clean!(m::KRRModel) 
@@ -193,6 +196,7 @@ function MLJ.transform(LS::LeverageSampler, fitresult, x::NamedTuple)
     rng = MersenneTwister(LS.rng)
     idxs = StatsBase.sample(rng,x[1], Weights(fitresult),LS.s, replace=false) |> sort
     w = 1 ./ sqrt.(fitresult[idxs]*LS.s)
+    # w = ones(length(w))
     y = x[2]
     return table((idx=idxs,val=w[:].*y[idxs]))
 end
@@ -202,6 +206,7 @@ function MLJ.inverse_transform(LS::LeverageSampler, fitresult, x::NamedTuple)
     yt = x[2]
     # w = 1 ./ fitresult[1][idx]
     w = sqrt.(fitresult[idx]*LS.s)
+    # w = ones(length(w))
     return table((idx=idx,val=w.*yt))
 end
 
@@ -213,6 +218,7 @@ function MLJ.transform(LS::LeverageSampler, fitresult, K::Array{Float64,2})
     w = fitresult[1]
     K = K[idx,2:end]
     w = 1 ./ sqrt.(fitresult*LS.s)
+    # w = ones(length(w))
     Wl = diagm(w[idx])
     Wr = diagm(w[:])
     return hcat(idx,Wl*K*Wr)

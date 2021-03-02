@@ -8,7 +8,7 @@ import MLJBase
 const MMI = MLJModelInterface
 
 @with_kw mutable struct GaussianProcess <: MLJ.Deterministic
-    kernel::Kernel = EyeKernel()
+    kernel::Kernel = SqExponentialKernel()
     noise::Float64 = 1.0
     opt_noise::Bool = true
 end
@@ -20,6 +20,5 @@ function MMI.fit(model::GaussianProcess, verbosity, X, y)
 end
 
 function MMI.predict(model::GaussianProcess, fitresult, Xnew)
-    fitresult.likelihood.σ²[1] = model.noise
     return  predict_y(fitresult,Xnew)
 end
