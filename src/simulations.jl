@@ -1,5 +1,6 @@
 using Parameters, Plots, JLD2
 using KernelFunctions: Kernel
+import KernelFunctions
 
 @with_kw struct SimConfig
     config_name::String
@@ -13,12 +14,16 @@ using KernelFunctions: Kernel
     alpha_range::Array{Float64,1}
     hyper_points::Int64
     rea::Int64
-    train_rea::Int64
+    tune_rea::Int64
     SNR::Int64
 end
 
 abstract type AlgConfig end
-@with_kw mutable struct LKRRAllgConfig <: AlgConfig
+@with_kw mutable struct KRRAlgConfig <: AlgConfig
+    name::String
+end
+
+@with_kw mutable struct LKRRAlgConfig <: AlgConfig
     name::String
     constructor::Any
     sampling::PassiveSampling
@@ -37,22 +42,21 @@ end
     tol::Float64 = 1e-6
 end
 
-function self_tuning_lkrr(simconf::SimConfig, algconf::LKRRAllgConfig)
+function self_tuning_lkrr(simconf::SimConfig, algconf::LKRRAlgConfig)
     krr_model = KRRModel(mu=1e-8, kernel="")
     ls_model = LeverageSampler(algconf.sampling,1,1,1)
     lkrr_model = LKRRModel(krr_model,ls_model)
 
     N = simconf.size[1]*simconf.size[2]
-    strat = [(collect(1:N),collect(1:N)) for i in 1:simconf.train_rea]
+    strat = [(collect(1:N),collect(1:N)) for i in 1:simconf.tune_rea]
     AD = AllData(N)
     r_mu = range(lkrr_model, :(KRR.mu), lower=simconf.mu_range[1], upper=simconf.mu_range[2], scale=:log10);
     r_alpha = range(lkrr_model, :(LS.alpha), lower=simconf.alpha_range[1], upper=simconf.alpha_range[2], scale=:log10);
-    train_rea = simconf.train_rea
-    if algconf.sampling isa GreedyLeverageSampling; train_rea = 1; end
-    # self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.RandomSearch(), n=simconf.hyper_points, resampling=AD, repeats=train_rea, range=[r_mu, r_alpha], measure=tuple_rms);
+    tune_rea = simconf.tune_rea
+    if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; end
     param_ranges = [r_mu, r_alpha]
     if algconf.sampling isa UniformSampling; param_ranges = r_mu; end
-    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=simconf.hyper_points, resampling=AD, repeats=train_rea, range=param_ranges, measure=tuple_rms);
+    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=simconf.hyper_points, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
     return self_tuning_regressor
 end
 
@@ -72,9 +76,11 @@ function run_simulation(cfg, algconf_list)
 end
 export run_simulation
 
-function run_alg(algconf::LKRRAllgConfig,cfg,f,X,K)
+function run_alg(algconf::LKRRAlgConfig,cfg,f,X,K)
     N = length(f)
     F = table((idx=collect(1:N),val=f[:]))
+    kfunc = KernelFunctions.transform(KernelFunctions.ExponentialKernel(),0.1)
+    K = KernelFunctions.kernelmatrix(kfunc,X,obsdim=1)
     K = hcat(collect(1:N),K)
     AD = AllData(N)
     self_tuned_model = self_tuning_lkrr(cfg,algconf)
@@ -103,6 +109,31 @@ function run_alg(algconf::GPAlgConfig,cfg,f,X,K)
     return (parameter_values = cfg.samples, measurements = test_err)
 end
 
+function run_alg(algconf::KRRAlgConfig,cfg,f,X,K)
+    N = length(f)
+    kfunc = KernelFunctions.transform(KernelFunctions.ExponentialKernel(),0.1)
+    K = KernelFunctions.kernelmatrix(kfunc,X,obsdim=1)
+    K = hcat(collect(1:N),K)
+    F = table((idx=collect(1:N),val=f[:]))
+    krr_model = KRRModel()
+    krr = machine(krr_model,K,F)
+    test_err = zeros(length(cfg.samples))
+    r_mu = range(krr_model, :mu, lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
+    for (i,s) in enumerate(cfg.samples)
+        holdout = Holdout(fraction_train = s/N, shuffle=true)
+        strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.tune_rea]
+        self_tuning_model = TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=tuple_rms);
+        self_tuning = machine(self_tuning_model,K,F)
+        MLJ.fit!(self_tuning,verbosity=-1)
+        krr_model = report(self_tuning).best_history_entry.model
+        krr = machine(krr_model,K,F)
+        strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.rea]
+        result = evaluate!(krr, resampling=strat, measure=tuple_rms, verbosity=-1,check_measure=false)
+        test_err[i] = result.measurement[1] 
+    end
+    return (parameter_values = cfg.samples, measurements = test_err)
+end
+
 function plot_curves(cfg,algconf_list,result_curves)
     plot(0,0,xlabel="s",ylabel="RMS")
     for (n,name) in enumerate(cfg.data_types)
@@ -110,6 +141,7 @@ function plot_curves(cfg,algconf_list,result_curves)
         mkpath(figpath)
         mkpath("plots/latest")
         for (m,algconf) in enumerate(algconf_list)
+            @show result_curves[n][m].measurements
             plot!(result_curves[n][m].parameter_values, result_curves[n][m].measurements, yscale=:log10, label=algconf.name)
         end
         # title(name)
