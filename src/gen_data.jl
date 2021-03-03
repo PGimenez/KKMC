@@ -1,4 +1,3 @@
-using PyCall
 using LightGraphs
 using StatsBase, Statistics, SparseArrays, LinearAlgebra, JLD2, Random, MLJBase, Dates
 using DelimitedFiles

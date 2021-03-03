@@ -1,12 +1,13 @@
 using MLJ,MLJModelInterface, MLJTuning
 using Random, LinearAlgebra, StatsBase, Parameters
+using KernelFunctions: Kernel, kernelmatrix, ExponentialKernel
 import MLJBase
 
 const MMI = MLJModelInterface
 
-@mlj_model mutable struct KRRModel <: MMI.Deterministic
+@with_kw mutable struct KRRModel <: MMI.Deterministic
     mu::Float64 = 1.0
-    kernel::String = "linear"
+    kernel::Kernel = ExponentialKernel()
 end
 
 
@@ -132,25 +133,21 @@ function sortdata(K::Array{Float64,2})
 end
 
 function MMI.fit(m::KRRModel,verbosity::Int,X,y)
-    println("fit KRR") 
-    idx = y[1]
-    K = X[:,2:end]
-    K = K[:,idx]
-    y = y[2]
-    fitresult = (idx,inv(K+m.mu*I)*y)
+    K = kernelmatrix(m.kernel,X,obsdim=1)
+    fitresult = (X,(K+m.mu*I) \ y)
     cache = nothing
     report = nothing
     return (fitresult,cache,report)
 end
 
 
-function MMI.predict(m::KRRModel, fitresult, xnew) 
+function MMI.predict(m::KRRModel, fitresult, Xnew) 
     println("predict KRR") 
-    samples, coef = fitresult
-    idx = setdiff(Int.(xnew[:,1]),samples) #contains unobserved indices
-    K = xnew[:,2:end]
-    K = K[idx,samples]
-    return table((idx=idx,val=K*coef))
+    Xtrain, coef = fitresult
+    s = length(coef)
+    X = vcat(Xtrain,Xnew)
+    K = kernelmatrix(m.kernel,X,obsdim=1)[s+1:end,1:s]
+    return K*coef
 end
 
 function MMI.fit(LS::LeverageSampler, verbosity::Int, X, y)
@@ -166,9 +163,7 @@ function MMI.fit(LW::LeverageWeighter, verbosity::Int, X, y)
     weights = 1 ./ sqrt.(probs*LS.s)
     return (weights[:],cache,report)
 end
-# function MMI.clean!(m::KRRModel) 
-    # return 1
-# end
+
 function MMI.clean!(m::LeverageSampler) 
     return 1
 end

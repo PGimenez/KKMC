@@ -17,6 +17,8 @@ export KRR, VectorData, fit!, predict!, SamplingMatrix, VectorSampler, KronVecto
 
 export MF, KMF, RGKMF, fit!, predict!, MatrixData
 
+export KRRModel
+
 export PassiveSampling, UniformSampling, LeverageSampling, GreedyLeverageSampling
 export get_lscores, Leverage, AllData, train_test_pairs, LeverageWeighter, LeverageSampler, transform, LKRRModel, tuple_rms
 
