@@ -239,6 +239,7 @@ function mushroom_matrix(N, L)
     else
         Kh = Kw
     end
+    Pr = Pr .+ 1e-8*randn(size(Pr))
 return F,Pr,Kw,Kh
 end
 
