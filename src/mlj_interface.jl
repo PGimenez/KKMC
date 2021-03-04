@@ -24,20 +24,15 @@ end
 
 
 @with_kw mutable struct LeverageSampler{T} <: MMI.Deterministic
-    type::T
-    alpha::Float64
-    s::Int
-    rng
-    kernel::Kernel 
+    type::T = UniformSampling()
+    alpha::Float64 = 1.0
+    s::Int = 1
+    rng = 1
+    kernel::Kernel = ExponentialKernel()
 end
-LeverageSampler(; type="Leverage", alpha=1.0,s=1,rng=nothing) = LeverageSampler(type,alpha,s,rng)
+# LeverageSampler(; type="Leverage", alpha=1.0,s=1,rng=nothing,kernel=ExponentialKernel()) = LeverageSampler(type,alpha,s,rng)
 
 
-@with_kw mutable struct LeverageWeighter{T} <: MMI.Deterministic
-    type::T
-    alpha::Float64
-    s::Int
-end
 
 function Leverage(type,alpha,s,K,folds)
     lscores = get_lscores(type,K,1,alpha)
@@ -178,16 +173,18 @@ function MLJ.inverse_transform(LS::LeverageSampler, fitresult, x)
 end
 
 
+# function MLJ.inverse_transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x)
+    # test_idx = setdiff(1:length(x),fitresult.idx)
+    # return table((idx=test_idx,val=x[test_idx]))
+# end
 function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x)
     idx = sortperm(fitresult.weights)[1:LS.s] |> sort
     return x[idx,:]
 end
 
-MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, N::Int) = ones(N)
+MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, N::Int) = ones(length(fitresult.idx))
 
 function tuple_rms(yhat::NamedTuple, ground::Array{Float64,1}) 
-    # s = sortperm(ground[1])
-    # ground = (ground[1][s],ground[2][s])
     MLJ.rms(yhat[2],ground[yhat[1]])
 end
 
