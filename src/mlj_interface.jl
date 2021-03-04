@@ -28,6 +28,7 @@ end
     alpha::Float64
     s::Int
     rng
+    kernel::Kernel 
 end
 LeverageSampler(; type="Leverage", alpha=1.0,s=1,rng=nothing) = LeverageSampler(type,alpha,s,rng)
 
@@ -60,7 +61,7 @@ end
 
 function MMI.fit(model::TunedLKRRModel, verbosity, X, y)
     if model.tuned == false
-        println("fit tuner")
+        verbosity > 0 ? println("fit tuner") : nothing
         mach = machine(model.tuner,X,y)
         MLJBase.fit!(mach,force=true)
         model.tuned_model = mach.fitresult.model 
@@ -69,7 +70,7 @@ function MMI.fit(model::TunedLKRRModel, verbosity, X, y)
         model.tuned = true
         return (lkrr.fitresult,nothing,nothing)
     else
-        println("fit LKRR in tuner")
+        verbosity > 0 ? println("fit LKRR in tuner") : nothing
         lkrr = machine(model.tuned_model,X,y)
         MLJBase.fit!(lkrr)
         return (lkrr.fitresult,nothing,nothing)
@@ -77,62 +78,35 @@ function MMI.fit(model::TunedLKRRModel, verbosity, X, y)
 end
 
 function MMI.update(model::TunedLKRRModel, verbosity::Int, old_fitresult, old_cache, X, y)
-    println("update TunedLKRR")
+    verbosity > 0 ? println("update TunedLKRR") : nothing
     model.tuned = false
     return MMI.fit(model,verbosity,X,y)
 end
 #
 function MMI.predict(model::TunedLKRRModel, fitresult, Xnew)
-    println("predict tuned")
     return MMI.predict(model.tuned_model,fitresult,Xnew)
 end
 
 function MMI.fit(model::LKRRModel, verbosity, X, y)
-    println("fit composite") 
+    verbosity > 0 ? println("fit composite") : nothing
     model.LS.rng = model.LS.rng + 1
     ys = source(y)
     Xs = source(X)
-    ys = @node sortdata(ys)
-    Xs = @node sortdata(Xs)
     ls = machine(model.LS,Xs,ys)
-    MLJ.fit!(ls)
-    lw_model = LeverageWeighter(model.LS.type,model.LS.alpha,model.LS.s)
-    lw = machine(lw_model,Xs,ys)
-    MLJ.fit!(lw)
-    # select samples and rows from K and weight them
+    MLJ.fit!(ls, verbosity=verbosity)
+    # select samples and rows from y,X and produce weights
     yt = transform(ls,ys)
     Kt = transform(ls,Xs)
-    # weigh columns/rows of full kernel matrix for prediction
-    K_predict = transform(lw,Xs)
-    krr = machine(model.KRR, Kt, yt)
-    zhat = MMI.predict(krr,K_predict)
+    wt = KKMC.transform(ls,source(length(y)))
+    krr = machine(model.KRR, Kt, yt, wt)
+    zhat = MMI.predict(krr,Xs)
     yhat = inverse_transform(ls,zhat)
     mach = machine(Deterministic(), source(Xs()), source(ys()); predict=yhat)
     return!(mach, model, verbosity)
 end
 
-
-
-weighted_kernel(X,W) = hcat(X[:,1],W*X[:,2:end]*W)
-weighted_kernel(X) = X
-
-function selectycols(m,K,y) 
-    return selectrows(K,y[1])
-end
-
-function sortdata(y::NamedTuple)
-    s = sortperm(y[1])
-    return table((idx=y[1][s], val=y[2][s]))
-end
-
-function sortdata(K::Array{Float64,2})
-    s = sortperm(K[:,1])
-    K[:,1] = K[:,1][s]
-    K[:,2:end] = K[:,2:end][s,:]
-    return K
-end
-
 function MMI.fit(m::KRRModel,verbosity::Int,X,y)
+    verbosity > 0 ? println("fit KRR") : nothing
     K = kernelmatrix(m.kernel,X,obsdim=1)
     fitresult = (X,(K+m.mu*I) \ y)
     cache = nothing
@@ -140,9 +114,20 @@ function MMI.fit(m::KRRModel,verbosity::Int,X,y)
     return (fitresult,cache,report)
 end
 
+function MMI.fit(m::KRRModel,verbosity::Int,X,y,w)
+    verbosity > 0 ? println("fit weighted KRR") : nothing
+    K = kernelmatrix(m.kernel,X,obsdim=1)
+    y = y .* w
+    W = diagm(w)
+    K = W*K*W
+    coef = (K+m.mu*I) \ y
+    fitresult = (X,W*coef)
+    cache = nothing
+    report = nothing
+    return (fitresult,cache,report)
+end
 
 function MMI.predict(m::KRRModel, fitresult, Xnew) 
-    println("predict KRR") 
     Xtrain, coef = fitresult
     s = length(coef)
     X = vcat(Xtrain,Xnew)
@@ -151,17 +136,14 @@ function MMI.predict(m::KRRModel, fitresult, Xnew)
 end
 
 function MMI.fit(LS::LeverageSampler, verbosity::Int, X, y)
-    K = X[:,2:end]
+    verbosity > 0 ? println("fit LS") : nothing
+    K = kernelmatrix(LS.kernel,X,obsdim=1)
     lscores = get_lscores(LS.type,K,1,LS.alpha)
     probs = lscores ./ sum(lscores) 
-    return (probs[:],nothing,nothing)
-end
-
-function MMI.fit(LW::LeverageWeighter, verbosity::Int, X, y)
-    LS = LeverageSampler(LW.type,LW.alpha,LW.s,1)
-    probs,cache,report = MMI.fit(LS,verbosity,X,y)
-    weights = 1 ./ sqrt.(probs*LS.s)
-    return (weights[:],cache,report)
+    rng = MersenneTwister(LS.rng)
+    idxs = StatsBase.sample(rng,collect(1:length(y)), Weights(probs),LS.s, replace=false) |> sort
+    w = 1 ./ sqrt.(probs*LS.s)
+    return ((idx=idxs,weights=w),nothing,nothing)
 end
 
 function MMI.clean!(m::LeverageSampler) 
@@ -184,73 +166,29 @@ function MLJBase.train_test_pairs(AD::AllData, rows)
     return [(shuffle(collect(1:AD.N)),shuffle(collect(1:AD.N)))]
 end
 
-function MLJ.transform(LS::LeverageSampler, fitresult, x::NamedTuple)
-    rng = MersenneTwister(LS.rng)
-    idxs = StatsBase.sample(rng,x[1], Weights(fitresult),LS.s, replace=false) |> sort
-    w = 1 ./ sqrt.(fitresult[idxs]*LS.s)
-    y = x[2]
-    return table((idx=idxs,val=w[:].*y[idxs]))
-end
+MLJ.transform(LS::LeverageSampler, fitresult, x) = x[fitresult.idx,:]
+# MLJ.transform(LS::LeverageSampler, fitresult, X::Array{Float64,2}) = X[fitresult.idx,:]
 
-function MLJ.inverse_transform(LS::LeverageSampler, fitresult, x::NamedTuple)
-    idx = x[1]
-    yt = x[2]
-    # w = 1 ./ fitresult[1][idx]
-    w = sqrt.(fitresult[idx]*LS.s)
-    return table((idx=idx,val=w.*yt))
+
+MLJ.transform(LS::LeverageSampler, fitresult, N::Int) = fitresult.weights[fitresult.idx]
+
+function MLJ.inverse_transform(LS::LeverageSampler, fitresult, x)
+    test_idx = setdiff(1:length(x),fitresult.idx)
+    return table((idx=test_idx,val=x[test_idx]))
 end
 
 
-function MLJ.transform(LS::LeverageSampler, fitresult, K::Array{Float64,2})
-    # idx = fitresult[2]
-    rng = MersenneTwister(LS.rng)
-    idx = StatsBase.sample(rng,Int.(K[:,1]), Weights(fitresult),LS.s, replace=false) |> sort
-    w = fitresult[1]
-    K = K[idx,2:end]
-    w = 1 ./ sqrt.(fitresult*LS.s)
-    Wl = diagm(w[idx])
-    Wr = diagm(w[:])
-    return hcat(idx,Wl*K*Wr)
+function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x)
+    idx = sortperm(fitresult.weights)[1:LS.s] |> sort
+    return x[idx,:]
 end
 
-function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x::NamedTuple)
-    idxs = sortperm(fitresult)[1:LS.s] |> sort
-    y = x[2]
-    return table((idx=idxs,val=y[idxs]))
-end
+MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, N::Int) = ones(N)
 
-function MLJ.inverse_transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x::NamedTuple)
-    idx = x[1]
-    yt = x[2]
-    # w = 1 ./ fitresult[1][idx]
-    return table((idx=idx,val=yt))
-end
-
-function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, K::Array{Float64,2})
-    idx = sortperm(fitresult)[1:LS.s] |> sort
-    return K[idx,:]
-end
-
-function MLJ.transform(LW::LeverageWeighter, fitresult, x::NamedTuple)
-    return fitresult .* x[2]
-end
-
-function MLJ.transform(LW::LeverageWeighter, fitresult, K::Array{Float64,2})
-    idx = K[:,1]
-    K = K[:,2:end]
-    W = diagm(fitresult)
-    return hcat(idx, W*K*W)
-end
-
-MLJ.transform(LW::LeverageWeighter{GreedyLeverageSampling}, fitresult, x::NamedTuple) =  x[2]
-MLJ.transform(LW::LeverageWeighter{GreedyLeverageSampling}, fitresult, K::Array{Float64,2}) = K
-
-function tuple_rms(yhat::NamedTuple, ground::NamedTuple) 
-        # s = sortperm(ground[1])
-        # ground = (ground[1][s],ground[2][s])
-    yhat = sortdata(yhat)
-    ground = sortdata(ground)
-    MLJ.rms(yhat[2],ground[2][yhat[1]])
+function tuple_rms(yhat::NamedTuple, ground::Array{Float64,1}) 
+    # s = sortperm(ground[1])
+    # ground = (ground[1][s],ground[2][s])
+    MLJ.rms(yhat[2],ground[yhat[1]])
 end
 
 MMI.metadata_pkg.(
