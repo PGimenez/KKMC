@@ -43,9 +43,9 @@ end
     tol::Float64 = 1e-6
 end
 
-function self_tuning_lkrr(simconf::SimConfig, algconf::LKRRAlgConfig)
-    krr_model = KRRModel(mu=1e-8, kernel="")
-    ls_model = LeverageSampler(algconf.sampling,1,1,1)
+function self_tuning_lkrr(simconf::SimConfig, algconf::LKRRAlgConfig, name)
+    krr_model = KRRModel(mu=1e-8, kernel=DataKernels[name])
+    ls_model = LeverageSampler(algconf.sampling,1,1,1,DataKernels[name])
     lkrr_model = LKRRModel(krr_model,ls_model)
 
     N = simconf.size[1]*simconf.size[2]
@@ -64,9 +64,10 @@ end
 function run_simulation(cfg, algconf_list)
     result_curves_conf = Array{Array{NamedTuple}}(undef,length(algconf_list))
     for (n,name) in enumerate(cfg.data_types)
+        println(name)
         result_curves = Array{NamedTuple}(undef,length(algconf_list),1)
-        for (m,algconf) in enumerate(algconf_list)
-            result_curves[m] = run_alg(algconf,cfg,name)
+        @time for (m,algconf) in enumerate(algconf_list)
+            @time result_curves[m] = run_alg(algconf,cfg,name)
         end
         result_curves_conf[n] = result_curves
     end
@@ -78,28 +79,48 @@ function run_alg(algconf::LKRRAlgConfig,cfg,name)
     N = convert(Int64,cfg.size[1])
     F,X,K,Kh = data_matrices(name,N,1,rank=1)
     N = length(F)
-    F = table((idx=collect(1:N),val=F[:]))
-    K = KernelFunctions.kernelmatrix(DataKernels[name],X,obsdim=1)
-    K = hcat(collect(1:N),K)
+    f = F[:]
     AD = AllData(N)
-    self_tuned_model = self_tuning_lkrr(cfg,algconf)
-    r_s = range(self_tuned_model, :(model.LS.s), values=cfg.samples);
-    self_tuned_wrapper = TunedLKRRModel(self_tuned_model,false,LKRRModel())
-    strat = [(collect(1:N),collect(1:N)) for i in 1:cfg.rea]
-    r_s = range(self_tuned_wrapper, :(tuner.model.LS.s), values=cfg.samples);
-    tuned_lkrr = machine(self_tuned_wrapper,K,F)
-    rea = cfg.rea
-    if algconf.sampling isa GreedyLeverageSampling; rea = 1; end
-    return MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=-1)
+    test_err = zeros(length(cfg.samples))
+    for (i,s) in enumerate(cfg.samples)
+        self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
+        # self_tuned_wrapper = TunedLKRRModel(self_tuned_model,false,LKRRModel())
+        # r_s = range(self_tuned_wrapper, :(tuner.model.LS.s), values=cfg.samples);
+        self_tuned_model.model.LS.s = s
+        tuned_lkrr = machine(self_tuned_model,X,f)
+        MLJ.fit!(tuned_lkrr,verbosity=-1)
+        lkrr_model = report(tuned_lkrr).best_history_entry.model
+        lkrr = machine(lkrr_model,X,f)
+        rea = cfg.rea
+        if algconf.sampling isa GreedyLeverageSampling; rea = 1; end
+        result = evaluate!(lkrr, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=-1,check_measure=false)
+        test_err[i] = result.measurement[1] 
+    end
+    return (parameter_values = cfg.samples, measurements = test_err)
 end
+    # if algconf.sampling isa GreedyLeverageSampling; rea = 1; end
+    # return MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=-1)
+    # for (i,s) in enumerate(cfg.samples)
+        # holdout = Holdout(fraction_train = s/N, shuffle=true)
+        # strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.tune_rea]
+        # self_tuning_model = TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=rms);
+        # self_tuning = machine(self_tuning_model,X,f)
+        # MLJ.fit!(self_tuning,verbosity=-1)
+        # krr_model = report(self_tuning).best_history_entry.model
+        # krr = machine(krr_model,X,f)
+        # strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.rea]
+        # result = evaluate!(krr, resampling=strat, measure=rms, verbosity=-1,check_measure=false)
+        # test_err[i] = result.measurement[1] 
+    # end
+# end
 
 function run_alg(algconf::GPAlgConfig,cfg,name)
     N = convert(Int64,cfg.size[1])
     f,X,K,Kh = data_matrices(name,N,1,rank=1)
     N = length(f)
-    F = f[:]
+    f = f[:]
     gp_model = GaussianProcess(DataKernels[name], algconf.noise, algconf.opt_noise)
-    gp = machine(gp_model,X,F)
+    gp = machine(gp_model,X,f)
     test_err = zeros(length(cfg.samples))
     for (i,s) in enumerate(cfg.samples)
         holdout = Holdout(fraction_train = s/N, shuffle=true)
@@ -114,23 +135,24 @@ function run_alg(algconf::KRRAlgConfig,cfg,name)
     N = convert(Int64,cfg.size[1])
     f,X,K,Kh = data_matrices(name,N,1,rank=1)
     N = length(f)
-    K = KernelFunctions.kernelmatrix(DataKernels[name],X,obsdim=1)
-    K = hcat(collect(1:N),K)
-    F = table((idx=collect(1:N),val=f[:]))
-    krr_model = KRRModel()
-    krr = machine(krr_model,K,F)
+    # K = KernelFunctions.kernelmatrix(DataKernels[name],X,obsdim=1)
+    # K = hcat(collect(1:N),K)
+    # F = table((idx=collect(1:N),val=f[:]))
+    f = f[:]
+    krr_model = KRRModel(1e-8,DataKernels[name])
+    krr = machine(krr_model,K,f)
     test_err = zeros(length(cfg.samples))
     r_mu = range(krr_model, :mu, lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
     for (i,s) in enumerate(cfg.samples)
         holdout = Holdout(fraction_train = s/N, shuffle=true)
         strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.tune_rea]
-        self_tuning_model = TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=tuple_rms);
-        self_tuning = machine(self_tuning_model,K,F)
+        self_tuning_model = TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=rms);
+        self_tuning = machine(self_tuning_model,X,f)
         MLJ.fit!(self_tuning,verbosity=-1)
         krr_model = report(self_tuning).best_history_entry.model
-        krr = machine(krr_model,K,F)
+        krr = machine(krr_model,X,f)
         strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.rea]
-        result = evaluate!(krr, resampling=strat, measure=tuple_rms, verbosity=-1,check_measure=false)
+        result = evaluate!(krr, resampling=strat, measure=rms, verbosity=-1,check_measure=false)
         test_err[i] = result.measurement[1] 
     end
     return (parameter_values = cfg.samples, measurements = test_err)

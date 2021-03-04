@@ -272,7 +272,7 @@ function data_matrices(name,N,L; rank=1)
     else
         error("Wrong data name")
     end
-    return F,X,make_PSD(Kw),make_PSD(Kh)
+    return F,X,Kw,Kh
 end
 
 function temp_covkernel(name,N,L)
