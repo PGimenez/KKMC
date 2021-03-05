@@ -89,6 +89,7 @@ function run_alg(algconf::LKRRAlgConfig,cfg,name)
         self_tuned_model.model.LS.s = s
         tuned_lkrr = machine(self_tuned_model,X,f)
         MLJ.fit!(tuned_lkrr,verbosity=-1)
+        plot_param_search(algconf,cfg,name,[tuned_lkrr])
         lkrr_model = report(tuned_lkrr).best_history_entry.model
         lkrr = machine(lkrr_model,X,f)
         rea = cfg.rea
@@ -113,6 +114,21 @@ end
         # test_err[i] = result.measurement[1] 
     # end
 # end
+function plot_param_search(algconf::LKRRAlgConfig,cfg,name,fitted_models)
+    return 1
+end
+
+function plot_param_search(algconf::LKRRAlgConfig,cfg,name,fitted_models)
+        # plot(0,0,xlabel="s",ylabel="RMS")
+        if algconf.sampling isa UniformSampling; return 0; end
+        figpath = "plots/debug/$(cfg.config_name)/"
+        mkpath(figpath)
+        for mach in fitted_models
+            plot(mach)
+            savefig("$figpath/fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(mach.fitresult.model.LS.s).pdf")
+            closeall()
+        end
+end
 
 function run_alg(algconf::GPAlgConfig,cfg,name)
     N = convert(Int64,cfg.size[1])
