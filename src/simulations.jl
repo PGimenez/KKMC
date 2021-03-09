@@ -30,17 +30,23 @@ end
     sampling::PassiveSampling
     grid::Bool
     options::Dict = Dict()
-    tol::Float64 = 1e-6
 end
 
 @with_kw mutable struct GPAlgConfig <: AlgConfig
+    name::String
+    constructor::Any
+    kernel::Kernel
+    noise::Float64
+    opt_noise::Bool
+end
+
+@with_kw mutable struct LGPAlgConfig <: AlgConfig
     name::String
     constructor::Any
     sampling::PassiveSampling
     kernel::Kernel
     noise::Float64
     opt_noise::Bool
-    tol::Float64 = 1e-6
 end
 
 function self_tuning_lkrr(simconf::SimConfig, algconf::LKRRAlgConfig, name)
@@ -56,8 +62,9 @@ function self_tuning_lkrr(simconf::SimConfig, algconf::LKRRAlgConfig, name)
     tune_rea = simconf.tune_rea
     if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; end
     param_ranges = [r_mu, r_alpha]
-    if algconf.sampling isa UniformSampling; param_ranges = r_mu; end
+    if algconf.sampling isa UniformSampling; param_ranges = r_mu; tune_rea = Int(round(sqrt(simconf.tune_rea))); end
     self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=simconf.hyper_points, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
+    # self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.RandomSearch(), n=simconf.hyper_points, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
     return self_tuning_regressor
 end
 
@@ -75,17 +82,31 @@ function run_simulation(cfg, algconf_list)
 end
 export run_simulation
 
+function fit_models(cfg, algconf_list)
+    for (n,name) in enumerate(cfg.data_types)
+        println(name)
+        binpath = "bin/$(cfg.config_name)/$name/"
+        mkpath(binpath)
+        @show algconf_list
+        @time for (m,algconf) in enumerate(algconf_list)
+            @time fitted_models = param_search(algconf,cfg,name)
+            @save "$binpath/fitted_$(algconf.name)_$(name)_$(cfg.size[1]).jld" fitted_models
+            plot_param_search(algconf,cfg,name,fitted_models)
+        end
+    end
+    return 1
+end
+export run_simulation
+
 function run_alg(algconf::LKRRAlgConfig,cfg,name)
     N = convert(Int64,cfg.size[1])
     F,X,K,Kh = data_matrices(name,N,1,rank=1)
     N = length(F)
     f = F[:]
     AD = AllData(N)
+    self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
     test_err = zeros(length(cfg.samples))
     for (i,s) in enumerate(cfg.samples)
-        self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
-        # self_tuned_wrapper = TunedLKRRModel(self_tuned_model,false,LKRRModel())
-        # r_s = range(self_tuned_wrapper, :(tuner.model.LS.s), values=cfg.samples);
         self_tuned_model.model.LS.s = s
         tuned_lkrr = machine(self_tuned_model,X,f)
         MLJ.fit!(tuned_lkrr,verbosity=-1)
@@ -99,22 +120,43 @@ function run_alg(algconf::LKRRAlgConfig,cfg,name)
     end
     return (parameter_values = cfg.samples, measurements = test_err)
 end
-    # if algconf.sampling isa GreedyLeverageSampling; rea = 1; end
-    # return MLJ.learning_curve(tuned_lkrr; range=r_s, resolution=10, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=-1)
-    # for (i,s) in enumerate(cfg.samples)
-        # holdout = Holdout(fraction_train = s/N, shuffle=true)
-        # strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.tune_rea]
-        # self_tuning_model = TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=rms);
-        # self_tuning = machine(self_tuning_model,X,f)
-        # MLJ.fit!(self_tuning,verbosity=-1)
-        # krr_model = report(self_tuning).best_history_entry.model
-        # krr = machine(krr_model,X,f)
-        # strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.rea]
-        # result = evaluate!(krr, resampling=strat, measure=rms, verbosity=-1,check_measure=false)
-        # test_err[i] = result.measurement[1] 
-    # end
-# end
-function plot_param_search(algconf::LKRRAlgConfig,cfg,name,fitted_models)
+
+function param_search(algconf::LKRRAlgConfig,cfg,name)
+    N = convert(Int64,cfg.size[1])
+    F,X,K,Kh = data_matrices(name,N,1,rank=1)
+    N = length(F)
+    f = F[:]
+    AD = AllData(N)
+    test_err = zeros(length(cfg.samples))
+    fitted_models = Array{Machine,1}(undef,length(cfg.samples))
+    for (i,s) in enumerate(cfg.samples)
+        self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
+        self_tuned_model.model.LS.s = s
+        tuned_lkrr = machine(self_tuned_model,X,f)
+        fitted_models[i] = MLJ.fit!(tuned_lkrr,verbosity=-1)
+    end
+    return fitted_models
+end
+
+function param_search(algconf::KRRAlgConfig,cfg,name)
+    N = convert(Int64,cfg.size[1])
+    F,X,K,Kh = data_matrices(name,N,1,rank=1)
+    N = length(F)
+    f = F[:]
+    AD = AllData(N)
+    test_err = zeros(length(cfg.samples))
+    fitted_models = Array{Machine,1}(undef,length(cfg.samples))
+    for (i,s) in enumerate(cfg.samples)
+        self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
+        self_tuned_model.model.LS.s = s
+        tuned_lkrr = machine(self_tuned_model,X,f)
+        fitted_models[i] = MLJ.fit!(tuned_lkrr,verbosity=-1)
+    end
+    return fitted_models
+end
+
+
+function plot_param_search(algconf,cfg,name,fitted_models)
     return 1
 end
 
@@ -147,13 +189,39 @@ function run_alg(algconf::GPAlgConfig,cfg,name)
     return (parameter_values = cfg.samples, measurements = test_err)
 end
 
+function run_alg(algconf::LGPAlgConfig,cfg,name)
+    N = convert(Int64,cfg.size[1])
+    f,X,K,Kh = data_matrices(name,N,1,rank=1)
+    N = length(f)
+    f = f[:]
+    gp_model = GaussianProcess(DataKernels[name], algconf.noise, algconf.opt_noise)
+    gp = machine(gp_model,X,f)
+    AD = AllData(N)
+    ls_model = LeverageSampler(algconf.sampling,1,1,1,DataKernels[name])
+    lgp_model = LGP(gp_model, ls_model)
+    r_alpha = range(lgp_model, :(LS.alpha), lower=cfg.alpha_range[1], upper=cfg.alpha_range[2], scale=:log10);
+    tune_rea = Int(round(sqrt(cfg.tune_rea)))
+    rea = cfg.rea
+    test_err = zeros(length(cfg.samples))
+    for (i,s) in enumerate(cfg.samples)
+        if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; rea=1; end
+        lgp_model.LS.s = s
+        self_tuning_lgp = TunedModel(model=lgp_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=AD, repeats=tune_rea, range=r_alpha, measure=tuple_rms);
+        tuned_lgp = machine(self_tuning_lgp, X, f)
+        MLJ.fit!(tuned_lgp)
+        opt_lgp_model = report(tuned_lgp).best_history_entry.model
+        opt_lgp = machine(opt_lgp_model,X,f)
+        result = evaluate!(opt_lgp, resampling=AD, measure=tuple_rms, repeats=rea, verbosity=-1,check_measure=false)
+        test_err[i] = result.measurement[1] 
+    end
+    return (parameter_values = cfg.samples, measurements = test_err)
+end
+
+
 function run_alg(algconf::KRRAlgConfig,cfg,name)
     N = convert(Int64,cfg.size[1])
     f,X,K,Kh = data_matrices(name,N,1,rank=1)
     N = length(f)
-    # K = KernelFunctions.kernelmatrix(DataKernels[name],X,obsdim=1)
-    # K = hcat(collect(1:N),K)
-    # F = table((idx=collect(1:N),val=f[:]))
     f = f[:]
     krr_model = KRRModel(1e-8,DataKernels[name])
     krr = machine(krr_model,K,f)

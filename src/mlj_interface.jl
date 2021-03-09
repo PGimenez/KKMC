@@ -95,7 +95,7 @@ function MMI.fit(model::LKRRModel, verbosity, X, y)
     wt = KKMC.transform(ls,source(length(y)))
     krr = machine(model.KRR, Kt, yt, wt)
     zhat = MMI.predict(krr,Xs)
-    yhat = inverse_transform(ls,zhat)
+    yhat = inverse_transform(ls,zhat) #predict must take whole dataset in X in order for the inverse transform to work
     mach = machine(Deterministic(), source(Xs()), source(ys()); predict=yhat)
     return!(mach, model, verbosity)
 end
@@ -126,7 +126,7 @@ function MMI.predict(m::KRRModel, fitresult, Xnew)
     Xtrain, coef = fitresult
     s = length(coef)
     X = vcat(Xtrain,Xnew)
-    K = kernelmatrix(m.kernel,X,obsdim=1)[s+1:end,1:s]
+    K = kernelmatrix(m.kernel,X,obsdim=1)[s+1:end,1:s]    # if Xnew is the whole dataset then this kernel matrix is evaluated at teh whole dataset (rows) and sampled entries (columns)
     return K*coef
 end
 
@@ -158,16 +158,19 @@ function MLJBase.train_test_pairs(LS::Leverage, rows)
 end
 
 function MLJBase.train_test_pairs(AD::AllData, rows)
-    return [(shuffle(collect(1:AD.N)),shuffle(collect(1:AD.N)))]
+    # return [(shuffle(collect(1:AD.N)),shuffle(collect(1:AD.N)))]
+    idx = shuffle(collect(1:AD.N))
+    return [(idx,idx)]
 end
 
-MLJ.transform(LS::LeverageSampler, fitresult, x) = x[fitresult.idx,:]
-# MLJ.transform(LS::LeverageSampler, fitresult, X::Array{Float64,2}) = X[fitresult.idx,:]
+MLJ.transform(LS::LeverageSampler, fitresult, x) = x[fitresult.idx]
+MLJ.transform(LS::LeverageSampler, fitresult, X::Array{Float64,2}) = X[fitresult.idx,:]
 
 
 MLJ.transform(LS::LeverageSampler, fitresult, N::Int) = fitresult.weights[fitresult.idx]
 
 function MLJ.inverse_transform(LS::LeverageSampler, fitresult, x)
+    # Selects the indices corresponding to the unobserved entries, which will be used as testing set. Requires x to contain the whole dataset in order to avoid selection errors with test_idx
     test_idx = setdiff(1:length(x),fitresult.idx)
     return table((idx=test_idx,val=x[test_idx]))
 end
@@ -177,7 +180,11 @@ end
     # test_idx = setdiff(1:length(x),fitresult.idx)
     # return table((idx=test_idx,val=x[test_idx]))
 # end
-function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x)
+function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x::Array{Float64,1})
+    idx = sortperm(fitresult.weights)[1:LS.s] |> sort
+    return x[idx]
+end
+function MLJ.transform(LS::LeverageSampler{GreedyLeverageSampling}, fitresult, x::Array{Float64,2})
     idx = sortperm(fitresult.weights)[1:LS.s] |> sort
     return x[idx,:]
 end

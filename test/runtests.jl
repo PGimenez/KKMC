@@ -103,3 +103,60 @@ end
     result_gp = evaluate!(gp, resampling=strat, measure=rms, verbosity=-1,check_measure=false)
     @test abs(result_gp.measurement[1] - result_lkrr.measurement[1]) < 1.5
 end
+
+
+# @testset "Learning network LGP" begin
+    Random.seed!(1920)
+    t = 450
+    ys = source(y)
+    Xs = source(X)
+    ls_model = LeverageSampler(LeverageSampling(),1,t,2,k)
+    ls = machine(ls_model,Xs,ys)
+    MLJ.fit!(ls,verbosity=-1)
+
+    yt = KKMC.transform(ls,ys)
+    Xt = KKMC.transform(ls,Xs)
+
+    gp_model = GaussianProcess(k, 1e-5, true)
+    gp = machine(gp_model, Xt, yt)
+    MLJ.fit!(gp,verbosity=-1)
+    zhat = MLJ.predict(gp,Xs)
+    @test mean(abs.(zhat()[1:N-t,:] .- y[1:N-t])) < 0.3
+
+    # test inverse transform selecting test samples excluding training ones
+    yhat = KKMC.inverse_transform(ls,zhat)
+    rms_network = tuple_rms(yhat(),y)
+    @test abs(rms_network - 5.7) < 0.1
+
+    # test LKRRModel 
+    ls_model.rng = 1
+    lgp_model = LGP(gp_model, ls_model)
+    lgp = machine(lgp_model, X, y)
+    MLJ.fit!(lgp,force=true,verbosity=-1)
+    MLJ.predict(lgp)
+    @test abs(tuple_rms(MLJ.predict(lgp),y) - rms_network) == 0
+
+    # Leverage sampling
+    # ls_model = LeverageSampler(LeverageSampling(),1,t,2,k)
+    # lgp_model = LGP(gp_model, ls_model)
+    # lgp = machine(lgp_model, X, y)
+    # MLJ.fit!(lgp,force=true,verbosity=-1)
+    # MLJ.predict(lgp)
+    # @test abs(tuple_rms(MLJ.predict(lgp),y) - 3.24) < 0.1
+
+    # # Greedy leverage sampling
+    # ls_model = LeverageSampler(GreedyLeverageSampling(),1,t,2,k)
+    # lgp_model = LGP(gp_model, ls_model)
+    # lgp = machine(lgp_model, X, y)
+    # MLJ.fit!(lgp,force=true,verbosity=-1)
+    # MLJ.predict(lgp)
+    # @test abs(tuple_rms(MLJ.predict(lgp),y) - 0.92) < 0.1
+# end
+
+# config_test = SimConfig( config_name = "test", data_types = ["housing"], size = (301,1), samples = Int.(collect(1:30:150)), passive = true, weighted = true, grid = false, mu_range = [1e-6,1e1,10], alpha_range = [1e-8,1e1,10], hyper_points = 50, rea = 10, tune_rea = 1, SNR = 1e15,
+# )
+
+# KKRR_unif_config = LKRRAlgConfig( name = "Uniform", sampling = UniformSampling(), grid=false, constructor = :(KRR))
+# KKRR_lev_config = LKRRAlgConfig( name = "Leverage", sampling = LeverageSampling(), grid=false, constructor = :(KRR))
+# alg_list = [KRR_config,KKRR_unif_config,KKRR_lev_config,KKRR_greedy_config,GP_config]
+# fit_models(config_test,alg_list)
