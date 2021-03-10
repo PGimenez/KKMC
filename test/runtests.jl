@@ -1,5 +1,6 @@
 
-using Test, AugmentedGaussianProcesses, KernelFunctions, LinearAlgebra, Statistics, Random, MLJ, MLJBase, KKMC
+using Test, AugmentedGaussianProcesses, KernelFunctions, LinearAlgebra, Statistics, Random, MLJ, MLJBase, KKMC, StatsBase
+using HypothesisTests
 Random.seed!(1)
 
 name="housing"
@@ -10,6 +11,46 @@ y,X,K,Kh = KKMC.data_matrices(name,N,1,rank=1)
 y = y[:]
 k = KernelFunctions.transform(ExponentialKernel(),1)
 Kf = kernelmatrix(k,X,obsdim=1)
+
+@testset "Sampler" begin
+    Ns = 200
+    t = 60
+    r = 1000
+    step = 20
+    sampled_idx = [1]
+    ls_model = LeverageSampler(KKMC.UniformSampling(),1,t,2,k)
+    ls = machine(ls_model,X[1:Ns,:],y[1:Ns])
+    for i=1:r
+        ls_model.rng = i
+        MLJ.fit!(ls,verbosity=-1,force = true)
+        append!(sampled_idx,ls.fitresult.idx)
+    end
+    idx_unif = StatsBase.sample(collect(1:Ns),t*r)
+    h_unif = StatsBase.fit(Histogram,idx_unif,1:step:Ns)
+    h_model = StatsBase.fit(Histogram,sampled_idx,1:step:Ns)
+    w = hcat(h_unif.weights,h_model.weights)
+    plot(w)
+    for i=1:length(h_model.weights)-1; @test abs(h_model.weights[i] - t*step*r/Ns) < 102 ; end
+
+    ls_model = LeverageSampler(KKMC.LeverageSampling(),1,t,2,k)
+    ls = machine(ls_model,X[1:Ns,:],y[1:Ns])
+    for i=1:r
+        ls_model.rng = i
+        MLJ.fit!(ls,verbosity=-1,force = true)
+        append!(sampled_idx,ls.fitresult.idx)
+    end
+    h_model = StatsBase.fit(Histogram,sampled_idx,1:1:Ns)
+    # plot(h_model)
+    sample_prop = h_model.weights ./ sum(h_model.weights)
+    sample_prop = sample_prop .- mean(sample_prop)
+    sample_prop = sample_prop ./ maximum(abs.(sample_prop))
+    w = ls.fitresult.weights ./ sum(h_model.weights)
+    prob = 1 ./ (w .* sqrt(t)) # weights are inversely proportional to sampling probability
+    prob = prob .- mean(prob)
+    prob = prob ./ maximum(abs.(prob))
+    plot(hcat(prob[1:end-1],sample_prop)) 
+    @test abs(cov(prob[1:end-1], sample_prop) - 0.139) < 0.025
+end
 
 @testset "Kernel matrix" begin
     Random.seed!(1920)

@@ -243,6 +243,8 @@ function run_alg(algconf::KRRAlgConfig,cfg,name)
 end
 
 function plot_curves(cfg,algconf_list,result_curves)
+    colors=["red","green","blue","cyan","magenta","olive","orange","black"]
+    markers=["*","diamond*","asterisk"]
     for (n,name) in enumerate(cfg.data_types)
         plot(0,0,xlabel="s",ylabel="RMS")
         figpath = "plots/$(cfg.config_name)/$name/"
@@ -250,7 +252,7 @@ function plot_curves(cfg,algconf_list,result_curves)
         mkpath("plots/latest")
         for (m,algconf) in enumerate(algconf_list)
             @show result_curves[n][m].measurements
-            plot!(result_curves[n][m].parameter_values, result_curves[n][m].measurements, yscale=:log10, label=algconf.name)
+            plot!(result_curves[n][m].parameter_values, result_curves[n][m].measurements, yscale=:log10, label=algconf.name,markershape=:auto, color=colors[m])
         end
         # title(name)
         savefig("$figpath/error.pdf")
