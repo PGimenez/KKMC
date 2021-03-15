@@ -22,7 +22,7 @@ export KRRModel
 export PassiveSampling, UniformSampling, LeverageSampling, GreedyLeverageSampling
 export get_lscores, Leverage, AllData, train_test_pairs, LeverageWeighter, LeverageSampler, transform, LKRRModel, tuple_rms
 
-export  SimConfig, KRRAlgConfig, LKRRAlgConfig, GPAlgConfig, LGPAlgConfig, plot_curves, run_simulation_list, fit_models
+export  SimConfig, KRRAlgConfig, LKRRAlgConfig, GPAlgConfig, LGPAlgConfig, plot_curves, paper_plots, run_simulation_list, fit_models
 export TunedLKRRModel, self_tuning_lkrr
 
 export GaussianProcess, LGP

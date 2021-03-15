@@ -1,4 +1,4 @@
-using Parameters, Plots, JLD2
+using Parameters, Plots, PGFPlotsX, JLD2, MLJTuning
 using KernelFunctions: Kernel
 import KernelFunctions
 
@@ -82,6 +82,14 @@ function run_simulation(cfg, algconf_list)
 end
 export run_simulation
 
+function  run_simulation_list(cfg_list,alg_list)
+    for cfg in cfg_list
+        result_curves_conf = run_simulation(cfg,alg_list)
+        save_curves(cfg,alg_list,result_curves_conf)
+        plot_curves(cfg,alg_list)
+    end
+end
+
 function fit_models(cfg, algconf_list)
     for (n,name) in enumerate(cfg.data_types)
         println(name)
@@ -110,7 +118,7 @@ function run_alg(algconf::LKRRAlgConfig,cfg,name)
         self_tuned_model.model.LS.s = s
         tuned_lkrr = machine(self_tuned_model,X,f)
         MLJ.fit!(tuned_lkrr,verbosity=-1)
-        plot_param_search(algconf,cfg,name,[tuned_lkrr])
+        save_param_search(algconf,cfg,name,tuned_lkrr)
         lkrr_model = report(tuned_lkrr).best_history_entry.model
         lkrr = machine(lkrr_model,X,f)
         rea = cfg.rea
@@ -118,6 +126,7 @@ function run_alg(algconf::LKRRAlgConfig,cfg,name)
         result = evaluate!(lkrr, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=-1,check_measure=false)
         test_err[i] = result.measurement[1] 
     end
+    plot_param_search(algconf,cfg,name)
     return (parameter_values = cfg.samples, measurements = test_err)
 end
 
@@ -156,21 +165,6 @@ function param_search(algconf::KRRAlgConfig,cfg,name)
 end
 
 
-function plot_param_search(algconf,cfg,name,fitted_models)
-    return 1
-end
-
-function plot_param_search(algconf::LKRRAlgConfig,cfg,name,fitted_models)
-        # plot(0,0,xlabel="s",ylabel="RMS")
-        if algconf.sampling isa UniformSampling; return 0; end
-        figpath = "plots/debug/$(cfg.config_name)/"
-        mkpath(figpath)
-        for mach in fitted_models
-            plot(mach)
-            savefig("$figpath/fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(mach.fitresult.model.LS.s).pdf")
-            closeall()
-        end
-end
 
 function run_alg(algconf::GPAlgConfig,cfg,name)
     N = convert(Int64,cfg.size[1])
@@ -242,31 +236,107 @@ function run_alg(algconf::KRRAlgConfig,cfg,name)
     return (parameter_values = cfg.samples, measurements = test_err)
 end
 
-function plot_curves(cfg,algconf_list,result_curves)
+function save_curves(cfg,algconf_list,result_curves)
+    for (n,name) in enumerate(cfg.data_types)
+        figpath = "plots/$(cfg.config_name)/$name"
+        mkpath(figpath)
+        @save "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1]).jld2" result_curves
+    end
+end
+
+function plot_curves(cfg,algconf_list)
     colors=["red","green","blue","cyan","magenta","olive","orange","black"]
     markers=["*","diamond*","asterisk"]
+    lines=[:solid,:solid,:solid,:solid,:dash,:dash,:dash,:dash]
     for (n,name) in enumerate(cfg.data_types)
+        figpath = "plots/$(cfg.config_name)/$name"
+        @JLD2.load "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1])-.jld2" result_curves
         plot(0,0,xlabel="s",ylabel="RMS")
         figpath = "plots/$(cfg.config_name)/$name/"
         mkpath(figpath)
         mkpath("plots/latest")
         for (m,algconf) in enumerate(algconf_list)
-            @show result_curves[n][m].measurements
-            plot!(result_curves[n][m].parameter_values, result_curves[n][m].measurements, yscale=:log10, label=algconf.name,markershape=:auto, color=colors[m])
+            plot!(result_curves[n][m].parameter_values, result_curves[n][m].measurements, yscale=:log10, label=algconf.name,markershape=:auto, color=colors[m],markerstrokealpha=1,markerstrokewidth=0,linestyle=lines[m],legend=:topright,background="gray94")
         end
         # title(name)
         savefig("$figpath/error.pdf")
         savefig("plots/latest/$(cfg.config_name)-$name-$(cfg.size[1])-error.pdf")
-        @save "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1])-.jld2" result_curves
-        closeall()
+        # closeall()
     end
 end
 
-function  run_simulation_list(cfg_list,alg_list)
+function plot_param_search(algconf,cfg,name)
+    return 1
+end
+
+
+function save_param_search(algconf::LKRRAlgConfig,cfg,name,fitted_model)
+        if algconf.sampling isa UniformSampling; return 0; end
+        figpath = "plots/debug/$(cfg.config_name)/"
+        mkpath(figpath)
+        @save "$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(fitted_model.fitresult.model.LS.s).jld2" fitted_model cfg algconf name
+end
+
+function plot_param_search(algconf::LKRRAlgConfig,cfg,name)
+        # plot(0,0,xlabel="s",ylabel="RMS")
+        if algconf.sampling isa UniformSampling; return 0; end
+        figpath = "plots/debug/$(cfg.config_name)/"
+        mkpath(figpath)
+        for s in cfg.samples
+            @JLD2.load "$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$s.jld2" fitted_model cfg algconf name
+            plot(fitted_model)
+            savefig("$figpath/fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$s.pdf")
+            # closeall()
+        end
+end
+
+function paper_plots(cfg_list,algconf_list)
+    pgfplotsx()
     for cfg in cfg_list
-        result_curves_conf = run_simulation(cfg,alg_list)
-        plot_curves(cfg,alg_list,result_curves_conf)
+        plot_curves(cfg,algconf_list)
+        for alg in algconf_list
+            # plot_param_search(alg, cfg, cfg.data_types[1])
+        end
     end
 end
 
 export plot_curves
+
+
+@recipe function f(mach::MLJBase.Machine{<:MLJTuning.EitherTunedModel})
+    r = report(mach).plotting
+    z = r.measurements
+    x = r.parameter_values[:,1]
+    y = r.parameter_values[:,2]
+
+    r.parameter_scales[1] == :none &&
+        (x = string.(x))
+
+    r.parameter_scales[2] == :none &&
+        (y = string.(y))
+
+    xsc, ysc = r.parameter_scales
+
+    xguide --> "\\mu"
+    yguide --> "\\alpha"
+    xscale --> (xsc in [:custom, :linear] ? :identity : xsc)
+    yscale --> (ysc in [:custom, :linear] ? :identity : ysc)
+
+    st = get(plotattributes, :seriestype, :scatter)
+
+    if st ∈ (:surface, :heatmap, :contour, :contourf, :wireframe)
+        ux = unique(x)
+        uy = unique(y)
+        m = reshape(z, (length(ux), length(uy)))'
+        ux, uy, m
+    else
+        label --> ""
+        seriestype := st
+        ms = get(plotattributes, :markersize, 4)
+        markersize := MLJTuning._getmarkersize(ms, z)
+        markershape --> :circle
+        markerstrokealpha --> 0
+        marker_z --> z
+        x, y
+    end
+end
