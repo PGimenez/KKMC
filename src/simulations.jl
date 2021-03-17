@@ -158,8 +158,8 @@ function param_search(algconf::KRRAlgConfig,cfg,name)
     for (i,s) in enumerate(cfg.samples)
         self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
         self_tuned_model.model.LS.s = s
-        tuned_lkrr = machine(self_tuned_model,X,f)
-        fitted_models[i] = MLJ.fit!(tuned_lkrr,verbosity=-1)
+        tuned_krr = machine(self_tuned_model,X,f)
+        fitted_models[i] = MLJ.fit!(tuned_krr,verbosity=-1)
     end
     return fitted_models
 end
@@ -202,7 +202,8 @@ function run_alg(algconf::LGPAlgConfig,cfg,name)
         lgp_model.LS.s = s
         self_tuning_lgp = TunedModel(model=lgp_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=AD, repeats=tune_rea, range=r_alpha, measure=tuple_rms);
         tuned_lgp = machine(self_tuning_lgp, X, f)
-        MLJ.fit!(tuned_lgp)
+        MLJ.fit!(tuned_lgp,verbosity=-1)
+        save_param_search(algconf,cfg,name,tuned_lgp)
         opt_lgp_model = report(tuned_lgp).best_history_entry.model
         opt_lgp = machine(opt_lgp_model,X,f)
         result = evaluate!(opt_lgp, resampling=AD, measure=tuple_rms, repeats=rea, verbosity=-1,check_measure=false)
@@ -227,6 +228,7 @@ function run_alg(algconf::KRRAlgConfig,cfg,name)
         self_tuning_model = TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=rms);
         self_tuning = machine(self_tuning_model,X,f)
         MLJ.fit!(self_tuning,verbosity=-1)
+        save_param_search(algconf,cfg,name,s,self_tuning)
         krr_model = report(self_tuning).best_history_entry.model
         krr = machine(krr_model,X,f)
         strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.rea]
@@ -246,7 +248,7 @@ end
 
 function plot_curves(cfg,algconf_list)
     colors=["red","green","blue","cyan","magenta","olive","orange","black"]
-    markers=["*","diamond*","asterisk"]
+    # markers=["*","diamond*","asterisk"]
     lines=[:solid,:solid,:solid,:solid,:dash,:dash,:dash,:dash]
     for (n,name) in enumerate(cfg.data_types)
         figpath = "plots/$(cfg.config_name)/$name"
@@ -270,11 +272,20 @@ function plot_param_search(algconf,cfg,name)
 end
 
 
-function save_param_search(algconf::LKRRAlgConfig,cfg,name,fitted_model)
-        if algconf.sampling isa UniformSampling; return 0; end
+function save_param_search(algconf::KRRAlgConfig,cfg,name,s,fitted_model)
+        # if algconf.sampling isa UniformSampling; return 0; end
         figpath = "plots/debug/$(cfg.config_name)/"
         mkpath(figpath)
-        @save "$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(fitted_model.fitresult.model.LS.s).jld2" fitted_model cfg algconf name
+        # @save "$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(fitted_model.fitresult.model.LS.s).jld2" fitted_model cfg algconf name
+        MLJ.save("$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(s).jlso", fitted_model) 
+end
+
+function save_param_search(algconf::Union{LKRRAlgConfig,LGPAlgConfig},cfg,name,fitted_model)
+        # if algconf.sampling isa UniformSampling; return 0; end
+        figpath = "plots/debug/$(cfg.config_name)/"
+        mkpath(figpath)
+        # @save "$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(fitted_model.fitresult.model.LS.s).jld2" fitted_model cfg algconf name
+        MLJ.save("$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(fitted_model.fitresult.model.LS.s).jlso", fitted_model) 
 end
 
 function plot_param_search(algconf::LKRRAlgConfig,cfg,name)
@@ -283,17 +294,69 @@ function plot_param_search(algconf::LKRRAlgConfig,cfg,name)
         figpath = "plots/debug/$(cfg.config_name)/"
         mkpath(figpath)
         for s in cfg.samples
-            @JLD2.load "$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$s.jld2" fitted_model cfg algconf name
+            # @JLD2.load "$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$s.jld2" fitted_model cfg algconf name
+            fitted_model = machine("$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$s.jlso")
             plot(fitted_model)
             savefig("$figpath/fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$s.pdf")
             # closeall()
         end
 end
 
+
+function scatter_param_search(algconf,cfg,name)
+    return 1
+end
+function scatter_param_search(algconf_list,cfg,name)
+    plot(0,0,xlabel="s",ylabel="RMS")
+    figpath = "plots/debug/$(cfg.config_name)/"
+    colors=["red","green","blue","cyan","magenta","olive","orange","black"]
+    markers=[:circle, :rect,  :diamond, :hexagon, :cross,  :utriangle, :dtriangle, :rtriangle, :ltriangle, :pentagon, :heptagon, :octagon]
+    mkpath(figpath)
+    p1 = 0
+    p2 = 1
+    for s in cfg.samples
+        l = @layout [a;b]
+        p1 = scatter()
+        p2 = scatter()
+        for (m,alg) in enumerate(algconf_list)
+            if alg isa Union{KRRAlgConfig,LKRRAlgConfig}
+                # @JLD2.load "$figpath/machine-fitted_$(alg.name)_$(name)_$(cfg.size[1])_$s.jld2" fitted_model cfg algconf name
+                fitted_model = machine("$figpath/machine-fitted_$(alg.name)_$(name)_$(cfg.size[1])_$s.jlso")
+                r = report(fitted_model).plotting
+                z = r.measurements
+                x = r.parameter_values[:,1]
+                scatter!(p1,x,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
+                xaxis!("\\mu")
+                if in(:sampling,fieldnames(typeof(alg))) && alg.sampling isa Union{LeverageSampling,GreedyLeverageSampling}
+                    y = r.parameter_values[:,2]
+                    scatter!(p2,y,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
+                xaxis!("\\alpha")
+                yaxis!("RMSE")
+                end
+            end
+            if alg isa LGPAlgConfig
+                # @JLD2.load "$figpath/machine-fitted_$(alg.name)_$(name)_$(cfg.size[1])_$s.jld2" fitted_model cfg algconf name
+                fitted_model = machine("$figpath/machine-fitted_$(alg.name)_$(name)_$(cfg.size[1])_$s.jlso")
+                r = report(fitted_model).plotting
+                z = r.measurements
+                x = r.parameter_values[:,1]
+                scatter!(p2,x,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
+            end
+                xaxis!("\\alpha")
+                yaxis!("RMSE")
+        end
+        plot(p1,p2)
+        savefig("$figpath/scatter_fitted_$(name)_$(cfg.size[1])_$s.pdf")
+        # closeall()
+    end
+end
+
+
 function paper_plots(cfg_list,algconf_list)
-    pgfplotsx()
+    # pgfplotsx()
     for cfg in cfg_list
-        plot_curves(cfg,algconf_list)
+        # plot_curves(cfg,algconf_list)
+            scatter_param_search(algconf_list, cfg, cfg.data_types[1])
         for alg in algconf_list
             # plot_param_search(alg, cfg, cfg.data_types[1])
         end
