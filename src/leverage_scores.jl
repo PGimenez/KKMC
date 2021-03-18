@@ -3,16 +3,22 @@ module LeverageScores
 using StatsBase
 using SparseArrays
 using Distributed
-using SharedArrays
+using SharedArrays, ReusePatterns
 import LinearAlgebra.eigen
 import Base.sortperm
 
-export get_lscores, PassiveSampling, UniformSampling, LeverageSampling, GreedyLeverageSampling
+export get_lscores, PassiveSampling, UniformSampling, UnweightedUniformSampling, LeverageSampling, UnweightedLeverageSampling, GreedyLeverageSampling
 
 abstract type PassiveSampling end
-struct UniformSampling <: PassiveSampling end
-struct LeverageSampling <: PassiveSampling end
+
+@quasiabstract struct UniformSampling <: PassiveSampling end
+@quasiabstract struct UnweightedUniformSampling <: UniformSampling end
+
+@quasiabstract struct LeverageSampling <: PassiveSampling end
+@quasiabstract struct UnweightedLeverageSampling <: LeverageSampling end
+
 struct GreedyLeverageSampling <: PassiveSampling end
+    
 
 function leverage_scores(K,mu)
     return diag(K*pinv(K+mu*I))
@@ -27,9 +33,9 @@ function leverage_kron(Kr,Kc,mu)
     idx_sort_c = sortperm(ec)
     er = er[idx_sort_r]; Qr = Qr[:,idx_sort_r]
     ec = ec[idx_sort_c]; Qc = Qc[:,idx_sort_c]
-    scores = SharedArray{Float64}(N*L)
-    # scores = zeros(N*L)
-    @sync @distributed for i in 1:N
+    # scores = SharedArray{Float64}(N*L)
+    scores = zeros(N*L)
+    for i in 1:N
         for j in 1:L
             idx = i + (j-1)*N
             scores[idx] = eigen_kron(Qr[i,:],Qc[j,:],er,ec,mu)

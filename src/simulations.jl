@@ -56,6 +56,7 @@ function run_simulation(cfg, algconf_list)
         println(name)
         result_curves = Array{NamedTuple}(undef,length(algconf_list),1)
         @time for (m,algconf) in enumerate(algconf_list)
+            println(algconf.name)
             @time result_curves[m] = run_alg(algconf,cfg,name)
         end
         result_curves_conf[n] = result_curves
@@ -77,7 +78,6 @@ function fit_models(cfg, algconf_list)
         println(name)
         binpath = "bin/$(cfg.config_name)/$name/"
         mkpath(binpath)
-        @show algconf_list
         @time for (m,algconf) in enumerate(algconf_list)
             @time fitted_models = param_search(algconf,cfg,name)
             @save "$binpath/fitted_$(algconf.name)_$(name)_$(cfg.size[1]).jld" fitted_models
@@ -96,9 +96,9 @@ function run_alg(algconf,cfg,name)
     test_err = zeros(length(cfg.samples))
     for (i,s) in enumerate(cfg.samples)
         self_tuned_model = self_tuning_model(algconf,cfg,name,N,s)
-        opt_model = tune_model(algconf,cfg,self_tuned_model,X,f,s)
+        opt_model = tune_model(algconf,cfg,name,self_tuned_model,X,f,s)
         mach = machine(opt_model,X,f)
-        sampler, reps = get_resampling(algconf,cfg.rea,N,s)
+        sampler, reps = get_resampling(algconf,N,s,cfg.rea)
         error_measure = get_measure(algconf)
         result = evaluate!(mach, resampling=sampler, repeats=reps, measure=error_measure, verbosity=-1,check_measure=false)
         test_err[i] = result.measurement[1] 
@@ -106,9 +106,9 @@ function run_alg(algconf,cfg,name)
     return (parameter_values = cfg.samples, measurements = test_err)
 end
 
-tune_model(algconf,cfg,self_tuned_model,X,f,s) = self_tuned_model
+tune_model(algconf,cfg,name,self_tuned_model,X,f,s) = self_tuned_model
 
-function tune_model(algconf::Union{KRRAlgConfig,LKRRAlgConfig,LGPAlgConfig},cfg,self_tuned_model,X,f,s)
+function tune_model(algconf::Union{KRRAlgConfig,LKRRAlgConfig,LGPAlgConfig},cfg,name,self_tuned_model,X,f,s)
         tuned_mach = machine(self_tuned_model,X,f)
         MLJ.fit!(tuned_mach,verbosity=-1)
         save_param_search(algconf,cfg,name,tuned_mach,s)
@@ -116,28 +116,29 @@ function tune_model(algconf::Union{KRRAlgConfig,LKRRAlgConfig,LGPAlgConfig},cfg,
 end
 
 
-get_resampling(algconf::Union{LKRRAlgConfig,LGPAlgConfig},rea,N,s) = (AllData(N), rea)
-get_resampling(algconf::Union{LKRRAlgConfig{GreedyLeverageSampling},LGPAlgConfig{GreedyLeverageSampling}},rea,N,s) = (AllData(N), 1)
+get_resampling(algconf::Union{LKRRAlgConfig,LGPAlgConfig},N,s,rea) = (AllData(N), rea)
+get_resampling(algconf::Union{LKRRAlgConfig{GreedyLeverageSampling},LGPAlgConfig{GreedyLeverageSampling}},N,s,rea) = (AllData(N), 1)
 get_resampling(algconf::Union{KRRAlgConfig,GPAlgConfig},N,s,rea) = (holdout_strategy(N,s,rea), 1)
 get_measure(algconf::Union{LKRRAlgConfig,LGPAlgConfig}) = tuple_rms
 get_measure(algconf::Union{KRRAlgConfig,GPAlgConfig}) = rms
 
-function holdout_strategy(s,N,rea)
+function holdout_strategy(N,s,rea)
         holdout = Holdout(fraction_train = s/N, shuffle=true)
-        return [MLJBase.train_test_pairs(holdout,1:N)[1] for r in 1:rea]
+        strat = [MLJBase.train_test_pairs(holdout,1:N)[1] for r in 1:rea]
+        return strat
 end
 
 function self_tuning_model(algconf::KRRAlgConfig,cfg,name,N,s)
     krr_model = KRRModel(1e-8,DataKernels[name])
     r_mu = range(krr_model, :mu, lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
     holdout = Holdout(fraction_train = s/N, shuffle=true)
-    strat = holdout_strategy(s,N,cfg.tune_rea)
-    return TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=Int(round(sqrt(cfg.hyper_points))), resampling=strat, range=r_mu, measure=rms);
+    strat = holdout_strategy(N,s,cfg.tune_rea)
+    return TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=Int(round(0.5*cfg.hyper_points)), resampling=strat, range=r_mu, measure=rms);
 end
 
 function self_tuning_model(algconf::LKRRAlgConfig,cfg,name,N,s)
     krr_model = KRRModel(mu=1e-8, kernel=DataKernels[name])
-    ls_model = LeverageSampler(algconf.sampling,1,1,1,DataKernels[name])
+    ls_model = LeverageSampler(algconf.sampling,1,s,1,DataKernels[name])
     lkrr_model = LKRRModel(krr_model,ls_model)
 
     N = cfg.size[1]*cfg.size[2]
@@ -149,7 +150,7 @@ function self_tuning_model(algconf::LKRRAlgConfig,cfg,name,N,s)
     hpoints = cfg.hyper_points
     if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; end
     param_ranges = [r_mu, r_alpha]
-    if algconf.sampling isa UniformSampling; param_ranges = r_mu; hpoints = Int(round(sqrt(cfg.hyper_points))); end
+    if algconf.sampling isa UniformSampling; param_ranges = r_mu; hpoints = Int(round(0.5*cfg.hyper_points)); end
     self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=hpoints, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
     return self_tuning_regressor
 end
@@ -161,30 +162,32 @@ end
 function self_tuning_model(algconf::LGPAlgConfig,cfg,name,N,s)
     gp_model = GaussianProcess(DataKernels[name], algconf.noise, algconf.opt_noise)
     AD = AllData(N)
-    ls_model = LeverageSampler(algconf.sampling,1,1,1,DataKernels[name])
+    ls_model = LeverageSampler(algconf.sampling,1,s,1,DataKernels[name])
     lgp_model = LGP(gp_model, ls_model)
     r_alpha = range(lgp_model, :(LS.alpha), lower=cfg.alpha_range[1], upper=cfg.alpha_range[2], scale=:log10);
     tune_rea = cfg.tune_rea
     rea = cfg.rea
-    if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; rea=1; end
-    return TunedModel(model=lgp_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=Int(round(sqrt(cfg.hyper_points))), resampling=AD, repeats=tune_rea, range=r_alpha, measure=tuple_rms);
+    hpoints = Int(round(0.5*cfg.hyper_points))
+    if algconf.sampling isa UniformSampling; hpoints = 2; end # uniform sampling is the same for all values of alpha
+    if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; end
+    return TunedModel(model=lgp_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=hpoints, resampling=AD, repeats=tune_rea, range=r_alpha, measure=tuple_rms);
 end
 
 function save_curves(cfg,algconf_list,result_curves)
     for (n,name) in enumerate(cfg.data_types)
         figpath = "plots/$(cfg.config_name)/$name"
         mkpath(figpath)
-        @save "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1]).jld2" result_curves
+        @JLD2.save "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1]).jld2" result_curves
     end
 end
 
 function plot_curves(cfg,algconf_list)
-    colors=["red","green","blue","cyan","magenta","olive","orange","black"]
+    colors=["red","green","blue","yellow","cyan","magenta","olive","orange","black"]
     # markers=["*","diamond*","asterisk"]
-    lines=[:solid,:solid,:solid,:solid,:dash,:dash,:dash,:dash]
+    lines=[:solid,:solid,:solid,:solid,:solid,:dash,:dash,:dash,:dash]
     for (n,name) in enumerate(cfg.data_types)
         figpath = "plots/$(cfg.config_name)/$name"
-        @JLD2.load "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1])-.jld2" result_curves
+        @JLD2.load "$figpath/result_curves-$(cfg.config_name)-$name-$(cfg.size[1]).jld2" result_curves
         plot(0,0,xlabel="s",ylabel="RMS")
         figpath = "plots/$(cfg.config_name)/$name/"
         mkpath(figpath)
@@ -267,7 +270,7 @@ function scatter_param_search(algconf_list,cfg,name)
                 yaxis!("RMSE")
                 end
             end
-            if alg isa LGPAlgConfig
+            if alg isa LGPAlgConfig && !(alg.sampling isa UniformSampling)
                 # @JLD2.load "$figpath/machine-fitted_$(alg.name)_$(name)_$(cfg.size[1])_$s.jld2" fitted_model cfg algconf name
                 fitted_model = machine("$figpath/machine-fitted_$(alg.name)_$(name)_$(cfg.size[1])_$s.jlso")
                 r = report(fitted_model).plotting
@@ -288,10 +291,10 @@ end
 function paper_plots(cfg_list,algconf_list)
     # pgfplotsx()
     for cfg in cfg_list
-         # plot_curves(cfg,algconf_list)
+         plot_curves(cfg,algconf_list)
             scatter_param_search(algconf_list, cfg, cfg.data_types[1])
         for alg in algconf_list
-             # plot_param_search(alg, cfg, cfg.data_types[1])
+             plot_param_search(alg, cfg, cfg.data_types[1])
         end
     end
 end

@@ -168,6 +168,8 @@ MLJ.transform(LS::LeverageSampler, fitresult, X::Array{Float64,2}) = X[fitresult
 
 
 MLJ.transform(LS::LeverageSampler, fitresult, N::Int) = fitresult.weights[fitresult.idx]
+MLJ.transform(LS::LeverageSampler{UnweightedLeverageSampling}, fitresult, N::Int) = ones(length(fitresult.weights[fitresult.idx]))
+MLJ.transform(LS::LeverageSampler{UnweightedUniformSampling}, fitresult, N::Int) = ones(length(fitresult.weights[fitresult.idx]))
 
 function MLJ.inverse_transform(LS::LeverageSampler, fitresult, x)
     # Selects the indices corresponding to the unobserved entries, which will be used as testing set. Requires x to contain the whole dataset in order to avoid selection errors with test_idx

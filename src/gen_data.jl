@@ -1,9 +1,19 @@
 using LightGraphs
-using StatsBase, Statistics, SparseArrays, LinearAlgebra, JLD2, Random, MLJBase, Dates
+using StatsBase, Statistics, SparseArrays, LinearAlgebra, JLD2, Random, MLJBase, Dates, Parameters
 using DelimitedFiles
 using KernelFunctions: ExponentialKernel, LinearKernel
 import RDatasets, KernelFunctions
 
+# @with_kw mutable struct Kernel 
+    # func::KernelFunctions.Kernel = KernelFunctions.ExponentialKernel()
+    # scale:Float64 = 1
+# end
+
+# DataKernels = Dict("housing"   => (SqExponentialKernel(),0.1),
+                   # "mushrooms" => (LinearKernel(c=1e-8),1)
+                   # "stocks"    => (SqExponentialKernel(),0.1),
+                   # "labor"     => (SqExponentialKernel(),0.1),
+                   # "wine"      => (SqqExponentialKernel(),2))
 DataKernels = Dict("housing"   => KernelFunctions.transform(ExponentialKernel(),0.1),
                    "mushrooms" => LinearKernel(c=1e-8),
                    "stocks"    => KernelFunctions.transform(ExponentialKernel(),0.1),

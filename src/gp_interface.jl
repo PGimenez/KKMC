@@ -36,7 +36,7 @@ function MMI.fit(model::LGP, verbosity, X, y)
     Xs = source(X)
     ls = machine(model.LS,Xs,ys)
     MLJ.fit!(ls, verbosity=verbosity)
-    # select samples and rows from y,X and produce weights
+    # select samples and rows from y,X
     yt = transform(ls,ys)
     Kt = transform(ls,Xs)
     gp = machine(model.GP, Kt, yt)
