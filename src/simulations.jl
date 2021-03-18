@@ -24,10 +24,10 @@ abstract type AlgConfig end
     name::String
 end
 
-@with_kw mutable struct LKRRAlgConfig <: AlgConfig
+@with_kw mutable struct LKRRAlgConfig{T} <: AlgConfig
     name::String
     constructor::Any
-    sampling::PassiveSampling
+    sampling::T = PassiveSampling()
     grid::Bool
     options::Dict = Dict()
 end
@@ -40,10 +40,10 @@ end
     opt_noise::Bool
 end
 
-@with_kw mutable struct LGPAlgConfig <: AlgConfig
+@with_kw mutable struct LGPAlgConfig{T} <: AlgConfig
     name::String
     constructor::Any
-    sampling::PassiveSampling
+    sampling::T = PassiveSampling()
     kernel::Kernel
     noise::Float64
     opt_noise::Bool
@@ -116,7 +116,8 @@ function tune_model(algconf::Union{KRRAlgConfig,LKRRAlgConfig,LGPAlgConfig},cfg,
 end
 
 
-get_resampling(algconf::Union{LKRRAlgConfig,LGPAlgConfig},N,s,rea) = (AllData(N), rea)
+get_resampling(algconf::Union{LKRRAlgConfig,LGPAlgConfig},rea,N,s) = (AllData(N), rea)
+get_resampling(algconf::Union{LKRRAlgConfig{GreedyLeverageSampling},LGPAlgConfig{GreedyLeverageSampling}},rea,N,s) = (AllData(N), 1)
 get_resampling(algconf::Union{KRRAlgConfig,GPAlgConfig},N,s,rea) = (holdout_strategy(N,s,rea), 1)
 get_measure(algconf::Union{LKRRAlgConfig,LGPAlgConfig}) = tuple_rms
 get_measure(algconf::Union{KRRAlgConfig,GPAlgConfig}) = rms
