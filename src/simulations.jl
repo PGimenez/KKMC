@@ -130,8 +130,8 @@ function self_tuning_model(algconf::KRRAlgConfig,cfg,name,N,s)
     krr_model = KRRModel(1e-8,DataKernels[name])
     r_mu = range(krr_model, :mu, lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
     holdout = Holdout(fraction_train = s/N, shuffle=true)
-    strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.tune_rea]
-    return TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=rms);
+    strat = holdout_strategy(s,N,cfg.tune_rea)
+    return TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=Int(round(sqrt(cfg.hyper_points))), resampling=strat, range=r_mu, measure=rms);
 end
 
 function self_tuning_model(algconf::LKRRAlgConfig,cfg,name,N,s)
