@@ -145,10 +145,11 @@ function self_tuning_model(algconf::LKRRAlgConfig,cfg,name,N,s)
     r_mu = range(lkrr_model, :(KRR.mu), lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
     r_alpha = range(lkrr_model, :(LS.alpha), lower=cfg.alpha_range[1], upper=cfg.alpha_range[2], scale=:log10);
     tune_rea = cfg.tune_rea
+    hpoints = cfg.hyper_points
     if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; end
     param_ranges = [r_mu, r_alpha]
-    if algconf.sampling isa UniformSampling; param_ranges = r_mu; tune_rea = Int(round(sqrt(cfg.tune_rea))); end
-    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
+    if algconf.sampling isa UniformSampling; param_ranges = r_mu; hpoints = Int(round(sqrt(cfg.hyper_points))); end
+    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=hpoints, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
     return self_tuning_regressor
 end
 
@@ -162,10 +163,10 @@ function self_tuning_model(algconf::LGPAlgConfig,cfg,name,N,s)
     ls_model = LeverageSampler(algconf.sampling,1,1,1,DataKernels[name])
     lgp_model = LGP(gp_model, ls_model)
     r_alpha = range(lgp_model, :(LS.alpha), lower=cfg.alpha_range[1], upper=cfg.alpha_range[2], scale=:log10);
-    tune_rea = Int(round(sqrt(cfg.tune_rea)))
+    tune_rea = cfg.tune_rea
     rea = cfg.rea
     if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; rea=1; end
-    return TunedModel(model=lgp_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=AD, repeats=tune_rea, range=r_alpha, measure=tuple_rms);
+    return TunedModel(model=lgp_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=Int(round(sqrt(cfg.hyper_points))), resampling=AD, repeats=tune_rea, range=r_alpha, measure=tuple_rms);
 end
 
 function save_curves(cfg,algconf_list,result_curves)
