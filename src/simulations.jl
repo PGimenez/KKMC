@@ -49,24 +49,6 @@ end
     opt_noise::Bool
 end
 
-function self_tuning_lkrr(simconf::SimConfig, algconf::LKRRAlgConfig, name)
-    krr_model = KRRModel(mu=1e-8, kernel=DataKernels[name])
-    ls_model = LeverageSampler(algconf.sampling,1,1,1,DataKernels[name])
-    lkrr_model = LKRRModel(krr_model,ls_model)
-
-    N = simconf.size[1]*simconf.size[2]
-    strat = [(collect(1:N),collect(1:N)) for i in 1:simconf.tune_rea]
-    AD = AllData(N)
-    r_mu = range(lkrr_model, :(KRR.mu), lower=simconf.mu_range[1], upper=simconf.mu_range[2], scale=:log10);
-    r_alpha = range(lkrr_model, :(LS.alpha), lower=simconf.alpha_range[1], upper=simconf.alpha_range[2], scale=:log10);
-    tune_rea = simconf.tune_rea
-    if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; end
-    param_ranges = [r_mu, r_alpha]
-    if algconf.sampling isa UniformSampling; param_ranges = r_mu; tune_rea = Int(round(sqrt(simconf.tune_rea))); end
-    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=simconf.hyper_points, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
-    # self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.RandomSearch(), n=simconf.hyper_points, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
-    return self_tuning_regressor
-end
 
 function run_simulation(cfg, algconf_list)
     result_curves_conf = Array{Array{NamedTuple}}(undef,length(algconf_list))
@@ -106,136 +88,84 @@ function fit_models(cfg, algconf_list)
 end
 export run_simulation
 
-function run_alg(algconf::LKRRAlgConfig,cfg,name)
+function run_alg(algconf,cfg,name)
     N = convert(Int64,cfg.size[1])
     F,X,K,Kh = data_matrices(name,N,1,rank=1)
     N = length(F)
     f = F[:]
-    AD = AllData(N)
-    self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
     test_err = zeros(length(cfg.samples))
     for (i,s) in enumerate(cfg.samples)
-        self_tuned_model.model.LS.s = s
-        tuned_lkrr = machine(self_tuned_model,X,f)
-        MLJ.fit!(tuned_lkrr,verbosity=-1)
-        save_param_search(algconf,cfg,name,tuned_lkrr)
-        lkrr_model = report(tuned_lkrr).best_history_entry.model
-        lkrr = machine(lkrr_model,X,f)
-        rea = cfg.rea
-        if algconf.sampling isa GreedyLeverageSampling; rea = 1; end
-        result = evaluate!(lkrr, resampling=AD, repeats=rea, measure=tuple_rms, verbosity=-1,check_measure=false)
+        self_tuned_model = self_tuning_model(algconf,cfg,name,N,s)
+        opt_model = tune_model(algconf,cfg,self_tuned_model,X,f,s)
+        mach = machine(opt_model,X,f)
+        sampler, reps = get_resampling(algconf,cfg.rea,N,s)
+        error_measure = get_measure(algconf)
+        result = evaluate!(mach, resampling=sampler, repeats=reps, measure=error_measure, verbosity=-1,check_measure=false)
         test_err[i] = result.measurement[1] 
     end
-    plot_param_search(algconf,cfg,name)
     return (parameter_values = cfg.samples, measurements = test_err)
 end
 
-function param_search(algconf::LKRRAlgConfig,cfg,name)
-    N = convert(Int64,cfg.size[1])
-    F,X,K,Kh = data_matrices(name,N,1,rank=1)
-    N = length(F)
-    f = F[:]
-    AD = AllData(N)
-    test_err = zeros(length(cfg.samples))
-    fitted_models = Array{Machine,1}(undef,length(cfg.samples))
-    for (i,s) in enumerate(cfg.samples)
-        self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
-        self_tuned_model.model.LS.s = s
-        tuned_lkrr = machine(self_tuned_model,X,f)
-        fitted_models[i] = MLJ.fit!(tuned_lkrr,verbosity=-1)
-    end
-    return fitted_models
-end
+tune_model(algconf,cfg,self_tuned_model,X,f,s) = self_tuned_model
 
-function param_search(algconf::KRRAlgConfig,cfg,name)
-    N = convert(Int64,cfg.size[1])
-    F,X,K,Kh = data_matrices(name,N,1,rank=1)
-    N = length(F)
-    f = F[:]
-    AD = AllData(N)
-    test_err = zeros(length(cfg.samples))
-    fitted_models = Array{Machine,1}(undef,length(cfg.samples))
-    for (i,s) in enumerate(cfg.samples)
-        self_tuned_model = self_tuning_lkrr(cfg,algconf,name)
-        self_tuned_model.model.LS.s = s
-        tuned_krr = machine(self_tuned_model,X,f)
-        fitted_models[i] = MLJ.fit!(tuned_krr,verbosity=-1)
-    end
-    return fitted_models
+function tune_model(algconf::Union{KRRAlgConfig,LKRRAlgConfig,LGPAlgConfig},cfg,self_tuned_model,X,f,s)
+        tuned_mach = machine(self_tuned_model,X,f)
+        MLJ.fit!(tuned_mach,verbosity=-1)
+        save_param_search(algconf,cfg,name,tuned_mach,s)
+        return  report(tuned_mach).best_history_entry.model
 end
 
 
+get_resampling(algconf::Union{LKRRAlgConfig,LGPAlgConfig},N,s,rea) = (AllData(N), rea)
+get_resampling(algconf::Union{KRRAlgConfig,GPAlgConfig},N,s,rea) = (holdout_strategy(N,s,rea), 1)
+get_measure(algconf::Union{LKRRAlgConfig,LGPAlgConfig}) = tuple_rms
+get_measure(algconf::Union{KRRAlgConfig,GPAlgConfig}) = rms
 
-function run_alg(algconf::GPAlgConfig,cfg,name)
-    N = convert(Int64,cfg.size[1])
-    f,X,K,Kh = data_matrices(name,N,1,rank=1)
-    N = length(f)
-    f = f[:]
-    gp_model = GaussianProcess(DataKernels[name], algconf.noise, algconf.opt_noise)
-    gp = machine(gp_model,X,f)
-    test_err = zeros(length(cfg.samples))
-    for (i,s) in enumerate(cfg.samples)
+function holdout_strategy(s,N,rea)
         holdout = Holdout(fraction_train = s/N, shuffle=true)
-        strat = [MLJBase.train_test_pairs(holdout,1:N)[1] for r in 1:cfg.rea]
-        result = evaluate!(gp, resampling=strat, measure=rms, verbosity=-1,check_measure=false)
-        test_err[i] = result.measurement[1] 
-    end
-    return (parameter_values = cfg.samples, measurements = test_err)
+        return [MLJBase.train_test_pairs(holdout,1:N)[1] for r in 1:rea]
 end
 
-function run_alg(algconf::LGPAlgConfig,cfg,name)
-    N = convert(Int64,cfg.size[1])
-    f,X,K,Kh = data_matrices(name,N,1,rank=1)
-    N = length(f)
-    f = f[:]
+function self_tuning_model(algconf::KRRAlgConfig,cfg,name,N,s)
+    krr_model = KRRModel(1e-8,DataKernels[name])
+    r_mu = range(krr_model, :mu, lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
+    holdout = Holdout(fraction_train = s/N, shuffle=true)
+    strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.tune_rea]
+    return TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=rms);
+end
+
+function self_tuning_model(algconf::LKRRAlgConfig,cfg,name,N,s)
+    krr_model = KRRModel(mu=1e-8, kernel=DataKernels[name])
+    ls_model = LeverageSampler(algconf.sampling,1,1,1,DataKernels[name])
+    lkrr_model = LKRRModel(krr_model,ls_model)
+
+    N = cfg.size[1]*cfg.size[2]
+    strat = [(collect(1:N),collect(1:N)) for i in 1:cfg.tune_rea]
+    AD = AllData(N)
+    r_mu = range(lkrr_model, :(KRR.mu), lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
+    r_alpha = range(lkrr_model, :(LS.alpha), lower=cfg.alpha_range[1], upper=cfg.alpha_range[2], scale=:log10);
+    tune_rea = cfg.tune_rea
+    if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; end
+    param_ranges = [r_mu, r_alpha]
+    if algconf.sampling isa UniformSampling; param_ranges = r_mu; tune_rea = Int(round(sqrt(cfg.tune_rea))); end
+    self_tuning_regressor = TunedModel(model=lkrr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=AD, repeats=tune_rea, range=param_ranges, measure=tuple_rms);
+    return self_tuning_regressor
+end
+
+function self_tuning_model(algconf::GPAlgConfig,cfg,name,N,s)
+    return GaussianProcess(DataKernels[name], algconf.noise, algconf.opt_noise)
+end
+
+function self_tuning_model(algconf::LGPAlgConfig,cfg,name,N,s)
     gp_model = GaussianProcess(DataKernels[name], algconf.noise, algconf.opt_noise)
-    gp = machine(gp_model,X,f)
     AD = AllData(N)
     ls_model = LeverageSampler(algconf.sampling,1,1,1,DataKernels[name])
     lgp_model = LGP(gp_model, ls_model)
     r_alpha = range(lgp_model, :(LS.alpha), lower=cfg.alpha_range[1], upper=cfg.alpha_range[2], scale=:log10);
     tune_rea = Int(round(sqrt(cfg.tune_rea)))
     rea = cfg.rea
-    test_err = zeros(length(cfg.samples))
-    for (i,s) in enumerate(cfg.samples)
-        if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; rea=1; end
-        lgp_model.LS.s = s
-        self_tuning_lgp = TunedModel(model=lgp_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=AD, repeats=tune_rea, range=r_alpha, measure=tuple_rms);
-        tuned_lgp = machine(self_tuning_lgp, X, f)
-        MLJ.fit!(tuned_lgp,verbosity=-1)
-        save_param_search(algconf,cfg,name,tuned_lgp)
-        opt_lgp_model = report(tuned_lgp).best_history_entry.model
-        opt_lgp = machine(opt_lgp_model,X,f)
-        result = evaluate!(opt_lgp, resampling=AD, measure=tuple_rms, repeats=rea, verbosity=-1,check_measure=false)
-        test_err[i] = result.measurement[1] 
-    end
-    return (parameter_values = cfg.samples, measurements = test_err)
-end
-
-
-function run_alg(algconf::KRRAlgConfig,cfg,name)
-    N = convert(Int64,cfg.size[1])
-    f,X,K,Kh = data_matrices(name,N,1,rank=1)
-    N = length(f)
-    f = f[:]
-    krr_model = KRRModel(1e-8,DataKernels[name])
-    krr = machine(krr_model,K,f)
-    test_err = zeros(length(cfg.samples))
-    r_mu = range(krr_model, :mu, lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
-    for (i,s) in enumerate(cfg.samples)
-        holdout = Holdout(fraction_train = s/N, shuffle=true)
-        strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.tune_rea]
-        self_tuning_model = TunedModel(model=krr_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=strat, range=r_mu, measure=rms);
-        self_tuning = machine(self_tuning_model,X,f)
-        MLJ.fit!(self_tuning,verbosity=-1)
-        save_param_search(algconf,cfg,name,s,self_tuning)
-        krr_model = report(self_tuning).best_history_entry.model
-        krr = machine(krr_model,X,f)
-        strat = [(randperm(N)[1:s],1:N) for x in 1:cfg.rea]
-        result = evaluate!(krr, resampling=strat, measure=rms, verbosity=-1,check_measure=false)
-        test_err[i] = result.measurement[1] 
-    end
-    return (parameter_values = cfg.samples, measurements = test_err)
+    if algconf.sampling isa GreedyLeverageSampling; tune_rea = 1; rea=1; end
+    return TunedModel(model=lgp_model, tuning=MLJ.LatinHypercube(gens=2, popsize=120), n=cfg.hyper_points, resampling=AD, repeats=tune_rea, range=r_alpha, measure=tuple_rms);
 end
 
 function save_curves(cfg,algconf_list,result_curves)
@@ -272,7 +202,7 @@ function plot_param_search(algconf,cfg,name)
 end
 
 
-function save_param_search(algconf::KRRAlgConfig,cfg,name,s,fitted_model)
+function save_param_search(algconf::KRRAlgConfig,cfg,name,fitted_model,s)
         # if algconf.sampling isa UniformSampling; return 0; end
         figpath = "plots/debug/$(cfg.config_name)/"
         mkpath(figpath)
@@ -280,7 +210,7 @@ function save_param_search(algconf::KRRAlgConfig,cfg,name,s,fitted_model)
         MLJ.save("$figpath/machine-fitted_$(algconf.name)_$(name)_$(cfg.size[1])_$(s).jlso", fitted_model) 
 end
 
-function save_param_search(algconf::Union{LKRRAlgConfig,LGPAlgConfig},cfg,name,fitted_model)
+function save_param_search(algconf::Union{LKRRAlgConfig,LGPAlgConfig},cfg,name,fitted_model,s)
         # if algconf.sampling isa UniformSampling; return 0; end
         figpath = "plots/debug/$(cfg.config_name)/"
         mkpath(figpath)
@@ -306,6 +236,7 @@ end
 function scatter_param_search(algconf,cfg,name)
     return 1
 end
+
 function scatter_param_search(algconf_list,cfg,name)
     plot(0,0,xlabel="s",ylabel="RMS")
     figpath = "plots/debug/$(cfg.config_name)/"
@@ -325,11 +256,11 @@ function scatter_param_search(algconf_list,cfg,name)
                 r = report(fitted_model).plotting
                 z = r.measurements
                 x = r.parameter_values[:,1]
-                scatter!(p1,x,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
+                scatter!(p1,x,z,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
                 xaxis!("\\mu")
                 if in(:sampling,fieldnames(typeof(alg))) && alg.sampling isa Union{LeverageSampling,GreedyLeverageSampling}
                     y = r.parameter_values[:,2]
-                    scatter!(p2,y,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
+                    scatter!(p2,y,z,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
                 xaxis!("\\alpha")
                 yaxis!("RMSE")
                 end
@@ -340,7 +271,7 @@ function scatter_param_search(algconf_list,cfg,name)
                 r = report(fitted_model).plotting
                 z = r.measurements
                 x = r.parameter_values[:,1]
-                scatter!(p2,x,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
+                scatter!(p2,x,z,xscale=:log10,yscale=:log10, label=alg.name,markershape=markers[m], color=colors[m],markerstrokealpha=1,markerstrokewidth=0,legend=:topright,background="gray94")
             end
                 xaxis!("\\alpha")
                 yaxis!("RMSE")
@@ -355,10 +286,10 @@ end
 function paper_plots(cfg_list,algconf_list)
     # pgfplotsx()
     for cfg in cfg_list
-        # plot_curves(cfg,algconf_list)
+         # plot_curves(cfg,algconf_list)
             scatter_param_search(algconf_list, cfg, cfg.data_types[1])
         for alg in algconf_list
-            # plot_param_search(alg, cfg, cfg.data_types[1])
+             # plot_param_search(alg, cfg, cfg.data_types[1])
         end
     end
 end
