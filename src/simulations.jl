@@ -141,7 +141,6 @@ function self_tuning_model(algconf::LKRRAlgConfig,cfg,name,N,s)
     ls_model = LeverageSampler(algconf.sampling,1,s,1,DataKernels[name])
     lkrr_model = LKRRModel(krr_model,ls_model)
 
-    N = cfg.size[1]*cfg.size[2]
     strat = [(collect(1:N),collect(1:N)) for i in 1:cfg.tune_rea]
     AD = AllData(N)
     r_mu = range(lkrr_model, :(KRR.mu), lower=cfg.mu_range[1], upper=cfg.mu_range[2], scale=:log10);
@@ -245,7 +244,7 @@ end
 function scatter_param_search(algconf_list,cfg,name)
     plot(0,0,xlabel="s",ylabel="RMS")
     figpath = "plots/debug/$(cfg.config_name)/"
-    colors=["red","green","blue","cyan","magenta","olive","orange","black"]
+    colors=["red","green","blue","yellow", "cyan","magenta","olive","orange","black"]
     markers=[:circle, :rect,  :diamond, :hexagon, :cross,  :utriangle, :dtriangle, :rtriangle, :ltriangle, :pentagon, :heptagon, :octagon]
     mkpath(figpath)
     p1 = 0

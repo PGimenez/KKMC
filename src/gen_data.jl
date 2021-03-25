@@ -14,11 +14,45 @@ import RDatasets, KernelFunctions
                    # "stocks"    => (SqExponentialKernel(),0.1),
                    # "labor"     => (SqExponentialKernel(),0.1),
                    # "wine"      => (SqqExponentialKernel(),2))
+function drug_matrix(N,L; delta = 0)
+    F = readdlm("data/drug_target/drug-target_interaction_affinities_Kd__Davis_et_al.2011.txt")
+    # if N == -1; N = size(F)[1]; end
+    # # if L == -1; L = size(F)[2]; end
+    # if L == -1; L = 50; end
+    N=L=50
+    F = F[1:N,1:L]
+    idx_tuples = vec(collect(Base.product(1:N,1:L)))
+    idx_tuples = hcat(first.(idx_tuples),last.(idx_tuples))
+    return vec(F), idx_tuples, [1], [1] 
+end
+function drug_kernels(N,L; delta = 0)
+    Kw = readdlm("data/drug_target/drug-drug_similarities_2D.txt")
+    Kh = readdlm("data/drug_target/target-target_similarities_WS.txt")
+    # if N == -1; N = size(Kw)[1]; end
+    # # if L == -1; L = size(Kh)[1]; end
+    # if L == -1; L = 50; end
+    N=L=50
+    Kw = Kw[1:N,1:N]
+    Kh = Kh[1:L,1:L]
+    er = (eigen(Kw)...,)[1]
+    ec = (eigen(Kh)...,)[1]
+    if delta > 0; F = F ./ (F .+maximum(F))*delta; end
+    return Kw ./ maximum(er), Kh ./ maximum(ec)
+end
+
+struct PredefinedKernel <: KernelFunctions.Kernel 
+    matrix::Array{Float64,2}
+end
+(k::PredefinedKernel)(x::Int,y::Int) = k.matrix[x,y]
+
 DataKernels = Dict("housing"   => KernelFunctions.transform(ExponentialKernel(),0.1),
                    "mushrooms" => LinearKernel(c=1e-8),
                    "stocks"    => KernelFunctions.transform(ExponentialKernel(),0.1),
                    "labor"     => KernelFunctions.transform(ExponentialKernel(),0.1),
-                   "wine"      => KernelFunctions.transform(ExponentialKernel(),2))
+                   "wine"      => KernelFunctions.transform(ExponentialKernel(),2),
+                   "drugs"     => KernelFunctions.KernelTensorProduct(PredefinedKernel(drug_kernels(-1,-1)[1]),PredefinedKernel(drug_kernels(-1,-1)[2])))
+
+struct KronKernel <: KernelFunctions.Kernel end
 
 function make_PSD(K)
     if size(K,1) == 1; return K; end;
@@ -121,20 +155,6 @@ function housing_matrix(N)
     return F, X, Kw, Kh
 end
 
-function drug_matrix(N,L; delta = 0)
-    Kw = readdlm("data/drug_target/drug-drug_similarities_2D.txt")
-    Kh = readdlm("data/drug_target/target-target_similarities_WS.txt")
-    F = readdlm("data/drug_target/drug-target_interaction_affinities_Kd__Davis_et_al.2011.txt")
-    if N == -1; N = size(Kw)[1]; end
-    if L == -1; L = size(Kh)[1]; end
-    Kw = Kw[1:N,1:N]
-    Kh = Kh[1:L,1:L]
-    er = (eigen(Kw)...,)[1]
-    ec = (eigen(Kh)...,)[1]
-    F = F[1:N,1:L]
-    if delta > 0; F = F ./ (F .+maximum(F))*delta; end
-    return F, Kw ./ maximum(er), Kh ./ maximum(ec)
-end
 
 function wine_data(N)
     # X1 = readdlm("data/wine/winequality-red.csv",';')
@@ -266,7 +286,7 @@ function data_matrices(name,N,L; rank=1)
     elseif (name == "synth_cov")
         F,Kw,Kh = synth_matrix_cov(N,L)
     elseif (name == "drugs")
-        F,Kw,Kh = drug_matrix(N,L)
+        F,X,Kw,Kh = drug_matrix(N,L)
     elseif (name == "drugs_norm")
         F,Kw,Kh = drug_matrix(N,L,delta=0.5)
     elseif (name == "mushrooms")

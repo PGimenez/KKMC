@@ -48,7 +48,7 @@ function eigen_kron(qr,qc,er,ec,mu)
     L = length(qc)
     r = 0.0
     for j in 1:L
-         for i in 1:N
+    @sync @distributed for i in 1:N
             e = ec[j]*er[i]
             r = r + (qc[j]*qr[i])^2*(e/(e+mu))
         end
